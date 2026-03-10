@@ -1,11 +1,10 @@
 import { useStore } from "@/lib/store";
-import { Moon, Sun, Trash2, Download, Shield, Eye, EyeOff } from "lucide-react";
+import { Moon, Sun, Trash2, Download, Shield } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useState, useEffect } from "react";
 import { isPinSetup } from "@/lib/crypto";
 import { LocalModelsSection } from "@/components/settings/LocalModelsSection";
 import { CloudProvidersSection } from "@/components/settings/CloudProvidersSection";
-import { getActiveProvider, setActiveProvider } from "@/lib/models";
 
 const TOR_TOGGLE_KEY = "zettel-tor-enabled";
 
@@ -13,7 +12,7 @@ export function SettingsView() {
   const { notes } = useStore();
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [torEnabled, setTorEnabled] = useState(() => localStorage.getItem(TOR_TOGGLE_KEY) === "true");
-  const hasPin = isPinSetup();
+  const [hasPin, setHasPin] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -22,6 +21,19 @@ export function SettingsView() {
   useEffect(() => {
     localStorage.setItem(TOR_TOGGLE_KEY, String(torEnabled));
   }, [torEnabled]);
+
+  useEffect(() => {
+    const loadPinStatus = async () => {
+      try {
+        const pinStatus = await isPinSetup();
+        setHasPin(pinStatus);
+      } catch (error) {
+        console.warn("Failed to read vault status", error);
+      }
+    };
+
+    void loadPinStatus();
+  }, []);
 
   const exportNotes = () => {
     const blob = new Blob([JSON.stringify(notes, null, 2)], { type: "application/json" });
