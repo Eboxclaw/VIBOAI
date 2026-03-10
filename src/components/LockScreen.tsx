@@ -7,7 +7,7 @@ interface LockScreenProps {
 }
 
 export function LockScreen({ onUnlock }: LockScreenProps) {
-  const isSetup = isPinSetup();
+  const [isSetup, setIsSetup] = useState(false);
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [step, setStep] = useState<"enter" | "confirm">("enter");
@@ -16,6 +16,19 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [retryAt, setRetryAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const loadPinStatus = async () => {
+      try {
+        const hasPin = await isPinSetup();
+        setIsSetup(hasPin);
+      } catch (statusError) {
+        setError(statusError instanceof Error ? statusError.message : "Unable to read vault status.");
+      }
+    };
+
+    void loadPinStatus();
+  }, []);
 
   useEffect(() => {
     if (retryAt <= now) return;
@@ -39,19 +52,23 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
     }
 
     if (isSetup) {
-      const valid = await verifyPin(pin);
-      if (valid) {
-        setFailedAttempts(0);
-        setRetryAt(0);
-        onUnlock(pin);
-      } else {
-        const nextFailedAttempts = failedAttempts + 1;
-        const backoffMs = Math.min(15000, nextFailedAttempts * 1000);
-        setFailedAttempts(nextFailedAttempts);
-        setRetryAt(Date.now() + backoffMs);
-        setNow(Date.now());
-        setError(`Incorrect PIN. Try again in ${Math.ceil(backoffMs / 1000)}s.`);
-        setPin("");
+      try {
+        const valid = await verifyPin(pin);
+        if (valid) {
+          setFailedAttempts(0);
+          setRetryAt(0);
+          onUnlock(pin);
+        } else {
+          const nextFailedAttempts = failedAttempts + 1;
+          const backoffMs = Math.min(15000, nextFailedAttempts * 1000);
+          setFailedAttempts(nextFailedAttempts);
+          setRetryAt(Date.now() + backoffMs);
+          setNow(Date.now());
+          setError(`Incorrect PIN. Try again in ${Math.ceil(backoffMs / 1000)}s.`);
+          setPin("");
+        }
+      } catch (unlockError) {
+        setError(unlockError instanceof Error ? unlockError.message : "Unable to unlock vault.");
       }
       return;
     }
@@ -72,8 +89,12 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
       return;
     }
 
-    await setupPin(pin);
-    onUnlock(pin);
+    try {
+      await setupPin(pin);
+      onUnlock(pin);
+    } catch (setupError) {
+      setError(setupError instanceof Error ? setupError.message : "Unable to set PIN.");
+    }
   };
 
   return (

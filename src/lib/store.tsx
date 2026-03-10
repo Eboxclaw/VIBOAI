@@ -51,19 +51,17 @@ export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProvid
   const tauriAvailable = tauriClient.isAvailable();
 
   useEffect(() => {
+    if (!tauriAvailable) return;
+
     const loadNotesFromTauri = async () => {
-      try {
-        const tauriNotes = await tauriClient.listNotes();
-        if (tauriNotes) {
-          setNotes(tauriNotes);
-        }
-      } catch (e) {
-        console.error("Failed to load notes from Tauri:", e);
+      const tauriNotes = await tauriClient.listNotes();
+      if (tauriNotes) {
+        setNotes(tauriNotes);
       }
     };
 
     void loadNotesFromTauri();
-  }, []);
+  }, [tauriAvailable]);
 
   // Save agent notes (unencrypted — agents always have access)
   useEffect(() => {
