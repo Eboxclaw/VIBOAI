@@ -19,7 +19,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com; style-src 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; script-src 'self'; connect-src 'self' http://localhost:5173 ws://localhost:5173 http://localhost:11434 http://localhost:11435 https://api.anthropic.com https://openrouter.ai https://api.moonshot.cn https://api.minimax.chat; object-src 'none'"
     }
   },
   "bundle": {
