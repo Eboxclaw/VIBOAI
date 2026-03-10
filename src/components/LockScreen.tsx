@@ -7,7 +7,7 @@ interface LockScreenProps {
 }
 
 export function LockScreen({ onUnlock }: LockScreenProps) {
-  const isSetup = isPinSetup();
+  const [isSetup, setIsSetup] = useState(false);
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [step, setStep] = useState<"enter" | "confirm">("enter");
@@ -16,6 +16,15 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [retryAt, setRetryAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const loadStatus = async () => {
+      const setup = await isPinSetup();
+      setIsSetup(setup);
+    };
+
+    void loadStatus();
+  }, []);
 
   useEffect(() => {
     if (retryAt <= now) return;
@@ -73,6 +82,7 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
     }
 
     await setupPin(pin);
+    setIsSetup(true);
     onUnlock(pin);
   };
 

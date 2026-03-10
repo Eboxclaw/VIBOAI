@@ -1,7 +1,6 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { Note, KanbanColumn, DEFAULT_COLUMNS, ViewMode } from "./types";
-import { encryptData, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
-import { encryptData, decryptData, getEncryptedNotes, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
+import { loadAgentNotes, saveAgentNotes } from "./crypto";
 import { tauriClient } from "./tauriClient";
 
 interface StoreContextType {
@@ -39,7 +38,7 @@ interface StoreProviderProps {
   initialNotes: Note[];
 }
 
-export function StoreProvider({ children, pin, initialNotes }: StoreProviderProps) {
+export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProviderProps) {
   const [notes, setNotes] = useState<Note[]>(initialNotes);
   const [agentNotes, setAgentNotes] = useState<Note[]>(() => {
     try { return JSON.parse(loadAgentNotes()); } catch { return []; }
@@ -47,21 +46,8 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
   const [columns] = useState<KanbanColumn[]>(loadColumns);
   const [activeView, setActiveView] = useState<ViewMode>("dashboard");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  const pinRef = useRef(pin);
   const tauriAvailable = tauriClient.isAvailable();
 
-  useEffect(() => {
-    const loadNotesFromTauri = async () => {
-      const tauriNotes = await tauriClient.listNotes();
-      if (tauriNotes) {
-        setNotes(tauriNotes);
-      }
-    };
-
-    loadNotesFromTauri();
-  }, []);
-
-  // Encrypt and save notes whenever they change
   useEffect(() => {
     if (!tauriAvailable) return;
 
@@ -75,22 +61,6 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
     void loadNotesFromTauri();
   }, [tauriAvailable]);
 
-  // Keep browser-local persistence only for non-Tauri runtime.
-  useEffect(() => {
-    if (tauriAvailable) return;
-
-    const save = async () => {
-      try {
-        const encrypted = await encryptData(JSON.stringify(notes), pinRef.current);
-        saveEncryptedNotes(encrypted);
-      } catch (e) {
-        console.error("Failed to encrypt notes:", e);
-      }
-    };
-    void save();
-  }, [notes, tauriAvailable]);
-
-  // Save agent notes (unencrypted — agents always have access)
   useEffect(() => {
     saveAgentNotes(JSON.stringify(agentNotes));
   }, [agentNotes]);
