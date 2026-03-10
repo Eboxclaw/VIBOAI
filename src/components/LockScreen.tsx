@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Lock, ShieldCheck, Eye, EyeOff } from "lucide-react";
 import { isPinSetup, verifyPin, setupPin } from "@/lib/crypto";
 
@@ -10,47 +10,75 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
   const isSetup = isPinSetup();
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
-  const [step, setStep] = useState<"enter" | "confirm">(isSetup ? "enter" : "enter");
+  const [step, setStep] = useState<"enter" | "confirm">("enter");
   const [error, setError] = useState("");
   const [showPin, setShowPin] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [retryAt, setRetryAt] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (retryAt <= now) return;
+
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+    }, 250);
+
+    return () => window.clearInterval(timer);
+  }, [retryAt, now]);
+
+  const remainingBackoffSeconds = Math.max(0, Math.ceil((retryAt - now) / 1000));
+  const isBackoffActive = retryAt > now;
 
   const handleSubmit = async () => {
     setError("");
 
+    if (isBackoffActive) {
+      setError(`Too many failed attempts. Try again in ${remainingBackoffSeconds}s.`);
+      return;
+    }
+
     if (isSetup) {
-      // Verify existing PIN
       const valid = await verifyPin(pin);
       if (valid) {
+        setFailedAttempts(0);
+        setRetryAt(0);
         onUnlock(pin);
       } else {
-        setError("Incorrect PIN. Try again.");
+        const nextFailedAttempts = failedAttempts + 1;
+        const backoffMs = Math.min(15000, nextFailedAttempts * 1000);
+        setFailedAttempts(nextFailedAttempts);
+        setRetryAt(Date.now() + backoffMs);
+        setNow(Date.now());
+        setError(`Incorrect PIN. Try again in ${Math.ceil(backoffMs / 1000)}s.`);
         setPin("");
       }
-    } else {
-      // Setup new PIN
-      if (step === "enter") {
-        if (pin.length < 4) {
-          setError("PIN must be at least 4 characters");
-          return;
-        }
-        setStep("confirm");
-        setConfirmPin("");
-      } else {
-        if (confirmPin !== pin) {
-          setError("PINs don't match. Try again.");
-          setConfirmPin("");
-          return;
-        }
-        await setupPin(pin);
-        onUnlock(pin);
-      }
+      return;
     }
+
+    if (step === "enter") {
+      if (pin.length < 4) {
+        setError("PIN must be at least 4 characters");
+        return;
+      }
+      setStep("confirm");
+      setConfirmPin("");
+      return;
+    }
+
+    if (confirmPin !== pin) {
+      setError("PINs don't match. Try again.");
+      setConfirmPin("");
+      return;
+    }
+
+    await setupPin(pin);
+    onUnlock(pin);
   };
 
   return (
     <div className="h-[100dvh] flex flex-col items-center justify-center bg-background p-6">
       <div className="w-full max-w-xs flex flex-col items-center gap-6">
-        {/* Icon */}
         <div className="h-16 w-16 rounded-2xl bg-foreground/10 flex items-center justify-center">
           {isSetup ? (
             <Lock className="h-8 w-8 text-foreground" />
@@ -59,7 +87,6 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
           )}
         </div>
 
-        {/* Title */}
         <div className="text-center">
           <h1 className="text-xl font-bold text-foreground">
             {isSetup ? "Vault Locked" : "Set Up Encryption"}
@@ -68,12 +95,11 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
             {isSetup
               ? "Enter your PIN to decrypt your notes"
               : step === "enter"
-              ? "Create a PIN to encrypt your notes at rest"
-              : "Confirm your PIN"}
+                ? "Create a PIN to encrypt your notes at rest"
+                : "Confirm your PIN"}
           </p>
         </div>
 
-        {/* PIN Input */}
         <div className="w-full space-y-3">
           <div className="relative">
             <input
@@ -102,9 +128,16 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
             <p className="text-xs text-destructive text-center">{error}</p>
           )}
 
+          {isBackoffActive && (
+            <p className="text-xs text-muted-foreground text-center">
+              Backoff active: wait {remainingBackoffSeconds}s before retrying.
+            </p>
+          )}
+
           <button
             onClick={handleSubmit}
-            className="w-full h-11 rounded-xl bg-foreground text-background font-medium text-sm hover:opacity-90 transition-opacity"
+            disabled={isBackoffActive}
+            className="w-full h-11 rounded-xl bg-foreground text-background font-medium text-sm hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isSetup ? "Unlock" : step === "enter" ? "Next" : "Enable Encryption"}
           </button>
