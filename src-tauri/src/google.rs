@@ -117,7 +117,7 @@ fn build_client(providers: &ProvidersState) -> Result<Client, String> {
 #[tauri::command]
 pub async fn google_calendar_list(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
 ) -> Result<Vec<CalendarList>, String> {
     let client = build_client(&providers)?;
@@ -140,7 +140,7 @@ pub async fn google_calendar_list(
 #[tauri::command]
 pub async fn google_calendar_events(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
     calendar_id: Option<String>,
     date_from: String,
@@ -172,7 +172,7 @@ pub async fn google_calendar_events(
 #[tauri::command]
 pub async fn google_calendar_today(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
     calendar_id: Option<String>,
 ) -> Result<Vec<CalendarEvent>, String> {
@@ -189,7 +189,7 @@ pub async fn google_calendar_today(
 #[tauri::command]
 pub async fn google_calendar_create(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
     args: CreateEventArgs,
 ) -> Result<CalendarEvent, String> {
@@ -227,7 +227,7 @@ pub async fn google_calendar_create(
 #[tauri::command]
 pub async fn google_calendar_update(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
     args: UpdateEventArgs,
 ) -> Result<CalendarEvent, String> {
@@ -264,7 +264,7 @@ pub async fn google_calendar_update(
 #[tauri::command]
 pub async fn google_calendar_delete(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
     calendar_id: Option<String>,
     event_id: String,
@@ -291,7 +291,7 @@ pub async fn google_calendar_delete(
 #[tauri::command]
 pub async fn google_gmail_list(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
     query: Option<String>,
     max_results: Option<u32>,
@@ -330,7 +330,7 @@ pub async fn google_gmail_list(
 #[tauri::command]
 pub async fn google_gmail_read(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
     message_id: String,
 ) -> Result<GmailMessageFull, String> {
@@ -350,7 +350,7 @@ pub async fn google_gmail_read(
 #[tauri::command]
 pub async fn google_gmail_unread_count(
     oauth: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers: State<'_, ProvidersState>,
 ) -> Result<u64, String> {
     let client = build_client(&providers)?;

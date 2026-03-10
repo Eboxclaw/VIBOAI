@@ -107,8 +107,8 @@ fn token_key(provider: &str, kind: &str) -> String {
     format!("{}_{}",  provider, kind)
 }
 
-fn store_token(crypto: &crate::crypto::CryptoState, provider: &str, kind: &str, value: &str) -> Result<(), String> {
-    crate::crypto::crypto_keystore_set(
+fn store_token(crypto: &crate::core::crypto::CryptoState, provider: &str, kind: &str, value: &str) -> Result<(), String> {
+    crate::core::crypto::crypto_keystore_set(
         unsafe { std::mem::transmute(crypto) },
         token_key(provider, kind),
         value.to_string(),
@@ -116,21 +116,21 @@ fn store_token(crypto: &crate::crypto::CryptoState, provider: &str, kind: &str, 
     )
 }
 
-fn load_token(crypto: &crate::crypto::CryptoState, provider: &str, kind: &str) -> Result<String, String> {
-    crate::crypto::crypto_keystore_get(
+fn load_token(crypto: &crate::core::crypto::CryptoState, provider: &str, kind: &str) -> Result<String, String> {
+    crate::core::crypto::crypto_keystore_get(
         unsafe { std::mem::transmute(crypto) },
         token_key(provider, kind),
     ).map_err(|_| format!("{} not authenticated — call oauth_auth_start first", provider))
 }
 
-fn delete_token(crypto: &crate::crypto::CryptoState, provider: &str, kind: &str) {
-    let _ = crate::crypto::crypto_keystore_delete(
+fn delete_token(crypto: &crate::core::crypto::CryptoState, provider: &str, kind: &str) {
+    let _ = crate::core::crypto::crypto_keystore_delete(
         unsafe { std::mem::transmute(crypto) },
         token_key(provider, kind),
     );
 }
 
-fn is_token_expired(crypto: &crate::crypto::CryptoState, provider: &str) -> bool {
+fn is_token_expired(crypto: &crate::core::crypto::CryptoState, provider: &str) -> bool {
     let Ok(expiry_str) = load_token(crypto, provider, "token_expiry") else { return true };
     let Ok(expiry) = chrono::DateTime::parse_from_rfc3339(&expiry_str) else { return true };
     Utc::now() > expiry.with_timezone(&Utc) - chrono::Duration::seconds(60)
@@ -155,7 +155,7 @@ pub fn oauth_register_provider(
 #[tauri::command]
 pub fn oauth_set_credentials(
     state: State<OAuthState>,
-    crypto: State<crate::crypto::CryptoState>,
+    crypto: State<crate::core::crypto::CryptoState>,
     provider: String,
     client_id: String,
     client_secret: String,
@@ -184,7 +184,7 @@ pub fn oauth_list_providers(state: State<OAuthState>) -> Vec<String> {
 #[tauri::command]
 pub fn oauth_auth_start(
     state: State<OAuthState>,
-    crypto: State<crate::crypto::CryptoState>,
+    crypto: State<crate::core::crypto::CryptoState>,
     provider: String,
 ) -> Result<String, String> {
     let providers = state.providers.lock().unwrap();
@@ -236,7 +236,7 @@ pub fn oauth_auth_start(
 #[tauri::command]
 pub async fn oauth_auth_callback(
     oauth_state: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers_state: State<'_, crate::providers::ProvidersState>,
     provider: String,
     code: String,
@@ -329,7 +329,7 @@ pub async fn oauth_auth_callback(
 #[tauri::command]
 pub async fn oauth_get_token(
     oauth_state: State<'_, OAuthState>,
-    crypto: State<'_, crate::crypto::CryptoState>,
+    crypto: State<'_, crate::core::crypto::CryptoState>,
     providers_state: State<'_, crate::providers::ProvidersState>,
     provider: String,
 ) -> Result<String, String> {
@@ -342,7 +342,7 @@ pub async fn oauth_get_token(
 /// Internal refresh — called by oauth_get_token and other modules
 pub async fn refresh_token_internal(
     oauth_state: &OAuthState,
-    crypto: &crate::crypto::CryptoState,
+    crypto: &crate::core::crypto::CryptoState,
     providers_state: &crate::providers::ProvidersState,
     provider: &str,
 ) -> Result<String, String> {
@@ -402,7 +402,7 @@ pub async fn refresh_token_internal(
 #[tauri::command]
 pub fn oauth_status(
     oauth_state: State<OAuthState>,
-    crypto: State<crate::crypto::CryptoState>,
+    crypto: State<crate::core::crypto::CryptoState>,
     provider: String,
 ) -> OAuthStatus {
     let authenticated = load_token(&crypto, &provider, "refresh_token").is_ok();
@@ -418,7 +418,7 @@ pub fn oauth_status(
 /// Revoke all tokens for a provider
 #[tauri::command]
 pub fn oauth_revoke(
-    crypto: State<crate::crypto::CryptoState>,
+    crypto: State<crate::core::crypto::CryptoState>,
     provider: String,
 ) -> Result<(), String> {
     delete_token(&crypto, &provider, "access_token");

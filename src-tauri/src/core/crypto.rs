@@ -75,8 +75,8 @@ pub struct CryptoState {
     pub db: Mutex<Connection>,
     pub vault_path: PathBuf,
     /// Derived key held in memory while vault is unlocked — zeroed on lock
-    session_key: Mutex<Option<Vec<u8>>>,
-    vault_state: Mutex<VaultState>,
+    pub(crate) session_key: Mutex<Option<Vec<u8>>>,
+    pub(crate) vault_state: Mutex<VaultState>,
 }
 
 impl CryptoState {
