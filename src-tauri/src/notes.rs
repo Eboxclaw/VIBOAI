@@ -1,10 +1,12 @@
+use chrono::{DateTime, Local, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
-use chrono::{DateTime, Local, Utc};
-use regex::Regex;
+
+use crate::core::filesystem::validate_vault_relative_path;
 
 // ─────────────────────────────────────────
 // TYPES
@@ -12,10 +14,10 @@ use regex::Regex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Note {
-    pub id: String,              // relative path from vault root, e.g. "folder/note.md"
-    pub filename: String,        // "note.md"
-    pub title: String,           // first H1 or filename without .md
-    pub content: String,         // raw markdown
+    pub id: String,       // relative path from vault root, e.g. "folder/note.md"
+    pub filename: String, // "note.md"
+    pub title: String,    // first H1 or filename without .md
+    pub content: String,  // raw markdown
     pub frontmatter: Frontmatter,
     pub wikilinks: Vec<WikiLink>,
     pub backlinks: Vec<Backlink>,
@@ -23,7 +25,7 @@ pub struct Note {
     pub created_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,
     pub word_count: usize,
-    pub path: String,            // absolute path on disk
+    pub path: String, // absolute path on disk
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -38,18 +40,18 @@ pub struct Frontmatter {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WikiLink {
-    pub target: String,         // "Other Note" or "folder/Other Note"
-    pub alias: Option<String>,  // [[Target|Alias]] → alias = "Alias"
-    pub heading: Option<String>,// [[Note#Heading]]
-    pub resolved: bool,         // does the target note exist?
+    pub target: String,          // "Other Note" or "folder/Other Note"
+    pub alias: Option<String>,   // [[Target|Alias]] → alias = "Alias"
+    pub heading: Option<String>, // [[Note#Heading]]
+    pub resolved: bool,          // does the target note exist?
     pub resolved_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Backlink {
-    pub source_id: String,      // note that links to this one
+    pub source_id: String, // note that links to this one
     pub source_title: String,
-    pub context: String,        // snippet of surrounding text
+    pub context: String, // snippet of surrounding text
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -72,7 +74,7 @@ pub struct SearchResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchMatch {
     pub line: usize,
-    pub text: String,           // line content with match
+    pub text: String, // line content with match
     pub match_start: usize,
     pub match_end: usize,
 }
@@ -151,12 +153,22 @@ fn extract_wikilinks(content: &str, all_notes: &[NoteStub], vault_path: &Path) -
             let heading = cap.get(2).map(|h| h.as_str()[1..].to_string());
             let alias = cap.get(3).map(|a| a.as_str()[1..].to_string());
             let (resolved, resolved_path) = resolve_link(&target, all_notes, vault_path);
-            WikiLink { target, alias, heading, resolved, resolved_path }
+            WikiLink {
+                target,
+                alias,
+                heading,
+                resolved,
+                resolved_path,
+            }
         })
         .collect()
 }
 
-fn resolve_link(target: &str, all_notes: &[NoteStub], _vault_path: &Path) -> (bool, Option<String>) {
+fn resolve_link(
+    target: &str,
+    all_notes: &[NoteStub],
+    _vault_path: &Path,
+) -> (bool, Option<String>) {
     // Obsidian shortest-path resolution: matches by filename or relative path
     let target_lower = target.to_lowercase();
     for note in all_notes {
@@ -223,7 +235,10 @@ fn load_all_stubs(vault_path: &Path) -> Vec<NoteStub> {
             let id = note_id_from_path(path, vault_path);
             let filename = path.file_name()?.to_string_lossy().to_string();
             let (fm, body) = parse_frontmatter(&content);
-            let title = fm.title.clone().unwrap_or_else(|| extract_title(body, &filename));
+            let title = fm
+                .title
+                .clone()
+                .unwrap_or_else(|| extract_title(body, &filename));
             let mut tags = fm.tags.clone();
             tags.extend(extract_tags_inline(body));
             tags.dedup();
@@ -247,7 +262,10 @@ fn build_note_from_path(path: &PathBuf, vault_path: &Path, all_stubs: &[NoteStub
     let id = note_id_from_path(path, vault_path);
     let filename = path.file_name()?.to_string_lossy().to_string();
     let (mut fm, body) = parse_frontmatter(&content);
-    let title = fm.title.clone().unwrap_or_else(|| extract_title(body, &filename));
+    let title = fm
+        .title
+        .clone()
+        .unwrap_or_else(|| extract_title(body, &filename));
     let mut tags = fm.tags.clone();
     tags.extend(extract_tags_inline(body));
     tags.dedup();
@@ -281,12 +299,12 @@ fn build_note_from_path(path: &PathBuf, vault_path: &Path, all_stubs: &[NoteStub
 #[tauri::command]
 pub fn note_create(
     state: State<NotesState>,
-    id: String,              // e.g. "folder/My Note.md"
+    id: String, // e.g. "folder/My Note.md"
     content: Option<String>,
     frontmatter: Option<Frontmatter>,
 ) -> Result<Note, String> {
     let vault_path = &state.vault_path;
-    let abs_path = vault_path.join(&id);
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
 
     if abs_path.exists() {
         return Err(format!("Note already exists: {}", id));
@@ -315,7 +333,7 @@ pub fn note_create(
 #[tauri::command]
 pub fn note_read(state: State<NotesState>, id: String) -> Result<Note, String> {
     let vault_path = &state.vault_path;
-    let abs_path = vault_path.join(&id);
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
 
     if !abs_path.exists() {
         return Err(format!("Note not found: {}", id));
@@ -328,13 +346,9 @@ pub fn note_read(state: State<NotesState>, id: String) -> Result<Note, String> {
 
 // WRITE (full overwrite)
 #[tauri::command]
-pub fn note_write(
-    state: State<NotesState>,
-    id: String,
-    content: String,
-) -> Result<Note, String> {
+pub fn note_write(state: State<NotesState>, id: String, content: String) -> Result<Note, String> {
     let vault_path = &state.vault_path;
-    let abs_path = vault_path.join(&id);
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
 
     if let Some(parent) = abs_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -349,13 +363,9 @@ pub fn note_write(
 
 // PATCH (update only body, keep frontmatter)
 #[tauri::command]
-pub fn note_patch(
-    state: State<NotesState>,
-    id: String,
-    body: String,
-) -> Result<Note, String> {
+pub fn note_patch(state: State<NotesState>, id: String, body: String) -> Result<Note, String> {
     let vault_path = &state.vault_path;
-    let abs_path = vault_path.join(&id);
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
     let existing = fs::read_to_string(&abs_path).map_err(|e| e.to_string())?;
     let (fm, _) = parse_frontmatter(&existing);
     let new_content = write_frontmatter(&fm, &body);
@@ -369,12 +379,12 @@ pub fn note_patch(
 #[tauri::command]
 pub fn note_delete(state: State<NotesState>, id: String) -> Result<(), String> {
     let vault_path = &state.vault_path;
-    let abs_path = vault_path.join(&id);
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
     if !abs_path.exists() {
         return Err(format!("Note not found: {}", id));
     }
     // Move to .trash folder inside vault (Obsidian behaviour)
-    let trash_path = vault_path.join(".trash").join(&id);
+    let trash_path = validate_vault_relative_path(vault_path, &format!(".trash/{}", id))?;
     if let Some(parent) = trash_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -390,8 +400,8 @@ pub fn note_move(
     new_id: String,
 ) -> Result<MoveResult, String> {
     let vault_path = &state.vault_path;
-    let src = vault_path.join(&id);
-    let dst = vault_path.join(&new_id);
+    let src = validate_vault_relative_path(vault_path, &id)?;
+    let dst = validate_vault_relative_path(vault_path, &new_id)?;
 
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -399,11 +409,22 @@ pub fn note_move(
     fs::rename(&src, &dst).map_err(|e| e.to_string())?;
 
     // Update all wikilinks in vault that pointed to old id
-    let old_stem = Path::new(&id).file_stem().unwrap_or_default().to_string_lossy().to_string();
-    let new_stem = Path::new(&new_id).file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let old_stem = Path::new(&id)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let new_stem = Path::new(&new_id)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let updated_notes = update_wikilinks_in_vault(vault_path, &old_stem, &new_stem);
 
-    Ok(MoveResult { new_id, updated_notes })
+    Ok(MoveResult {
+        new_id,
+        updated_notes,
+    })
 }
 
 // RENAME (same as move but stays in same folder)
@@ -411,10 +432,10 @@ pub fn note_move(
 pub fn note_rename(
     state: State<NotesState>,
     id: String,
-    new_name: String,           // just filename, e.g. "New Name.md"
+    new_name: String, // just filename, e.g. "New Name.md"
 ) -> Result<MoveResult, String> {
     let vault_path = &state.vault_path;
-    let src = vault_path.join(&id);
+    let src = validate_vault_relative_path(vault_path, &id)?;
     let parent = src.parent().unwrap_or(vault_path);
     let new_id = note_id_from_path(&parent.join(&new_name), vault_path);
     note_move(state, id, new_id)
@@ -422,15 +443,21 @@ pub fn note_rename(
 
 fn update_wikilinks_in_vault(vault_path: &Path, old_stem: &str, new_stem: &str) -> Vec<String> {
     let mut updated = vec![];
-    let re = Regex::new(&format!(r"\[\[{}(#[^\]|]*)?(|[^\]])?\]\]", regex::escape(old_stem))).unwrap();
+    let re = Regex::new(&format!(
+        r"\[\[{}(#[^\]|]*)?(|[^\]])?\]\]",
+        regex::escape(old_stem)
+    ))
+    .unwrap();
     for path in list_all_md_files(vault_path) {
         if let Ok(content) = fs::read_to_string(&path) {
             if re.is_match(&content) {
-                let new_content = re.replace_all(&content, |caps: &regex::Captures| {
-                    let heading = caps.get(1).map(|h| h.as_str()).unwrap_or("");
-                    let alias = caps.get(2).map(|a| a.as_str()).unwrap_or("");
-                    format!("[[{}{}{}]]", new_stem, heading, alias)
-                }).to_string();
+                let new_content = re
+                    .replace_all(&content, |caps: &regex::Captures| {
+                        let heading = caps.get(1).map(|h| h.as_str()).unwrap_or("");
+                        let alias = caps.get(2).map(|a| a.as_str()).unwrap_or("");
+                        format!("[[{}{}{}]]", new_stem, heading, alias)
+                    })
+                    .to_string();
                 let _ = fs::write(&path, new_content);
                 updated.push(note_id_from_path(&path, vault_path));
             }
@@ -447,14 +474,14 @@ pub fn note_list(state: State<NotesState>) -> Result<Vec<NoteStub>, String> {
 
 // LIST FOLDER
 #[tauri::command]
-pub fn note_list_folder(
-    state: State<NotesState>,
-    folder: String,
-) -> Result<Vec<NoteStub>, String> {
+pub fn note_list_folder(state: State<NotesState>, folder: String) -> Result<Vec<NoteStub>, String> {
     let vault_path = &state.vault_path;
-    let folder_path = vault_path.join(&folder);
+    let _folder_path = validate_vault_relative_path(vault_path, &folder)?;
     let all = load_all_stubs(vault_path);
-    Ok(all.into_iter().filter(|n| n.id.starts_with(&folder)).collect())
+    Ok(all
+        .into_iter()
+        .filter(|n| n.id.starts_with(&folder))
+        .collect())
 }
 
 // SEARCH — fulltext
@@ -466,13 +493,21 @@ pub fn note_search(
 ) -> Result<Vec<SearchResult>, String> {
     let vault_path = &state.vault_path;
     let cs = case_sensitive.unwrap_or(false);
-    let q = if cs { query.clone() } else { query.to_lowercase() };
+    let q = if cs {
+        query.clone()
+    } else {
+        query.to_lowercase()
+    };
     let stubs = load_all_stubs(vault_path);
     let mut results = vec![];
 
     for stub in &stubs {
         let content = fs::read_to_string(&stub.path).unwrap_or_default();
-        let search_content = if cs { content.clone() } else { content.to_lowercase() };
+        let search_content = if cs {
+            content.clone()
+        } else {
+            content.to_lowercase()
+        };
         let mut matches = vec![];
         for (i, line) in search_content.lines().enumerate() {
             if let Some(pos) = line.find(&q) {
@@ -486,7 +521,11 @@ pub fn note_search(
         }
         if !matches.is_empty() {
             let score = matches.len() as f32;
-            results.push(SearchResult { note: stub.clone(), matches, score });
+            results.push(SearchResult {
+                note: stub.clone(),
+                matches,
+                score,
+            });
         }
     }
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
@@ -500,18 +539,17 @@ pub fn note_search_tags(
     tags: Vec<String>,
 ) -> Result<Vec<NoteStub>, String> {
     let stubs = load_all_stubs(&state.vault_path);
-    Ok(stubs.into_iter().filter(|n| {
-        tags.iter().any(|t| n.tags.contains(t))
-    }).collect())
+    Ok(stubs
+        .into_iter()
+        .filter(|n| tags.iter().any(|t| n.tags.contains(t)))
+        .collect())
 }
 
 // FRONTMATTER — get
 #[tauri::command]
-pub fn note_get_frontmatter(
-    state: State<NotesState>,
-    id: String,
-) -> Result<Frontmatter, String> {
-    let content = fs::read_to_string(state.vault_path.join(&id)).map_err(|e| e.to_string())?;
+pub fn note_get_frontmatter(state: State<NotesState>, id: String) -> Result<Frontmatter, String> {
+    let abs_path = validate_vault_relative_path(&state.vault_path, &id)?;
+    let content = fs::read_to_string(abs_path).map_err(|e| e.to_string())?;
     let (fm, _) = parse_frontmatter(&content);
     Ok(fm)
 }
@@ -524,7 +562,7 @@ pub fn note_set_frontmatter(
     frontmatter: Frontmatter,
 ) -> Result<Note, String> {
     let vault_path = &state.vault_path;
-    let abs_path = vault_path.join(&id);
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
     let existing = fs::read_to_string(&abs_path).map_err(|e| e.to_string())?;
     let (_, body) = parse_frontmatter(&existing);
     let new_content = write_frontmatter(&frontmatter, body);
@@ -536,12 +574,10 @@ pub fn note_set_frontmatter(
 
 // WIKILINKS — outgoing from a note
 #[tauri::command]
-pub fn note_get_links(
-    state: State<NotesState>,
-    id: String,
-) -> Result<Vec<WikiLink>, String> {
+pub fn note_get_links(state: State<NotesState>, id: String) -> Result<Vec<WikiLink>, String> {
     let vault_path = &state.vault_path;
-    let content = fs::read_to_string(vault_path.join(&id)).map_err(|e| e.to_string())?;
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
+    let content = fs::read_to_string(abs_path).map_err(|e| e.to_string())?;
     let stubs = load_all_stubs(vault_path);
     let (_, body) = parse_frontmatter(&content);
     Ok(extract_wikilinks(body, &stubs, vault_path))
@@ -549,18 +585,25 @@ pub fn note_get_links(
 
 // BACKLINKS — all notes that link to this one
 #[tauri::command]
-pub fn note_get_backlinks(
-    state: State<NotesState>,
-    id: String,
-) -> Result<Vec<Backlink>, String> {
+pub fn note_get_backlinks(state: State<NotesState>, id: String) -> Result<Vec<Backlink>, String> {
     let vault_path = &state.vault_path;
-    let target_stem = Path::new(&id).file_stem().unwrap_or_default().to_string_lossy().to_string();
-    let re = Regex::new(&format!(r"\[\[{}(#[^\]|]*)?(|[^\]])?\]\]", regex::escape(&target_stem))).unwrap();
+    let target_stem = Path::new(&id)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let re = Regex::new(&format!(
+        r"\[\[{}(#[^\]|]*)?(|[^\]])?\]\]",
+        regex::escape(&target_stem)
+    ))
+    .unwrap();
     let stubs = load_all_stubs(vault_path);
     let mut backlinks = vec![];
 
     for stub in &stubs {
-        if stub.id == id { continue; }
+        if stub.id == id {
+            continue;
+        }
         let content = fs::read_to_string(&stub.path).unwrap_or_default();
         for line in content.lines() {
             if re.is_match(line) {
@@ -594,7 +637,10 @@ pub fn note_get_orphans(state: State<NotesState>) -> Result<Vec<NoteStub>, Strin
             }
         }
     }
-    Ok(stubs.into_iter().filter(|n| !linked_ids.contains(&n.id)).collect())
+    Ok(stubs
+        .into_iter()
+        .filter(|n| !linked_ids.contains(&n.id))
+        .collect())
 }
 
 // GRAPH DATA — for D3 / Cytoscape
@@ -633,7 +679,7 @@ pub fn note_daily_get(state: State<NotesState>) -> Result<Note, String> {
     let date = Local::now().format("%Y-%m-%d").to_string();
     let id = format!("daily/{}.md", date);
     let vault_path = &state.vault_path;
-    let abs_path = vault_path.join(&id);
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
 
     if abs_path.exists() {
         let stubs = load_all_stubs(vault_path);
@@ -649,11 +695,11 @@ pub fn note_daily_get(state: State<NotesState>) -> Result<Note, String> {
 #[tauri::command]
 pub fn note_snapshot(state: State<NotesState>, id: String) -> Result<String, String> {
     let vault_path = &state.vault_path;
-    let abs_path = vault_path.join(&id);
+    let abs_path = validate_vault_relative_path(vault_path, &id)?;
     let content = fs::read_to_string(&abs_path).map_err(|e| e.to_string())?;
     let ts = Utc::now().format("%Y%m%d%H%M%S").to_string();
     let snapshot_id = format!(".snapshots/{}/{}", id, ts);
-    let snapshot_path = vault_path.join(&snapshot_id);
+    let snapshot_path = validate_vault_relative_path(vault_path, &snapshot_id)?;
     if let Some(parent) = snapshot_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -669,19 +715,16 @@ pub fn note_restore(
     snapshot_id: String,
 ) -> Result<Note, String> {
     let vault_path = &state.vault_path;
-    let snapshot_path = vault_path.join(&snapshot_id);
+    let snapshot_path = validate_vault_relative_path(vault_path, &snapshot_id)?;
     let content = fs::read_to_string(&snapshot_path).map_err(|e| e.to_string())?;
     note_write(state, id, content)
 }
 
 // LIST SNAPSHOTS for a note
 #[tauri::command]
-pub fn note_list_snapshots(
-    state: State<NotesState>,
-    id: String,
-) -> Result<Vec<String>, String> {
+pub fn note_list_snapshots(state: State<NotesState>, id: String) -> Result<Vec<String>, String> {
     let vault_path = &state.vault_path;
-    let snapshot_dir = vault_path.join(".snapshots").join(&id);
+    let snapshot_dir = validate_vault_relative_path(vault_path, &format!(".snapshots/{}", id))?;
     if !snapshot_dir.exists() {
         return Ok(vec![]);
     }
@@ -713,7 +756,8 @@ pub fn note_stats(state: State<NotesState>) -> Result<VaultStats, String> {
     }
 
     let orphans = note_get_orphans(state)?.len();
-    let all_tags: std::collections::HashSet<_> = stubs.iter().flat_map(|n| n.tags.iter().cloned()).collect();
+    let all_tags: std::collections::HashSet<_> =
+        stubs.iter().flat_map(|n| n.tags.iter().cloned()).collect();
     let vault_size_bytes = list_all_md_files(vault_path)
         .iter()
         .filter_map(|p| fs::metadata(p).ok())

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 /// vault.rs — ViBo Encrypted Vault
 ///
 /// Encrypted notes stored as .md files with AES-256-GCM content.
@@ -22,15 +23,14 @@
 ///   notes.rs   → WikiLink type
 ///
 /// Cargo.toml: same as notes.rs + crypto.rs
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::core::crypto::{CryptoState, EncryptedBlob};
+use crate::core::filesystem::validate_vault_relative_path;
 
 // ─────────────────────────────────────────
 // TYPES
@@ -39,8 +39,8 @@ use crate::core::crypto::{CryptoState, EncryptedBlob};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct VaultNote {
     pub id: String,
-    pub title: String,              // decrypted title
-    pub content: String,            // decrypted markdown body
+    pub title: String,   // decrypted title
+    pub content: String, // decrypted markdown body
     pub created_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,
     pub path: String,
@@ -49,7 +49,7 @@ pub struct VaultNote {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct VaultNoteStub {
     pub id: String,
-    pub title: String,              // decrypted title
+    pub title: String, // decrypted title
     pub created_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,
 }
@@ -58,8 +58,8 @@ pub struct VaultNoteStub {
 #[derive(Debug, Serialize, Deserialize)]
 struct VaultNoteRaw {
     id: String,
-    encrypted_title: String,        // base64 EncryptedBlob JSON
-    encrypted_body: String,         // base64 EncryptedBlob JSON
+    encrypted_title: String, // base64 EncryptedBlob JSON
+    encrypted_body: String,  // base64 EncryptedBlob JSON
     created_at: String,
     modified_at: String,
 }
@@ -76,20 +76,38 @@ fn vault_dir(vault_path: &Path) -> PathBuf {
     vault_path.join("vault")
 }
 
-fn note_path(vault_path: &Path, id: &str) -> PathBuf {
-    vault_dir(vault_path).join(format!("{}.md", id))
+fn note_path(vault_path: &Path, id: &str) -> Result<PathBuf, String> {
+    validate_vault_relative_path(vault_path, &format!("vault/{}.md", id))
 }
 
 fn ensure_vault_dir(vault_path: &Path) -> Result<(), String> {
     fs::create_dir_all(vault_dir(vault_path)).map_err(|e| e.to_string())
 }
 
-fn decrypt_string(
-    crypto: &CryptoState,
-    blob_json: &str,
-) -> Result<String, String> {
-    let blob: EncryptedBlob = serde_json::from_str(blob_json)
-        .map_err(|e| format!("Invalid encrypted blob: {}", e))?;
+fn validate_vault_snapshot_id(snapshot_id: &str, expected_id: &str) -> Result<(), String> {
+    let mut parts = snapshot_id.split('/');
+    let p0 = parts.next();
+    let p1 = parts.next();
+    let p2 = parts.next();
+    let p3 = parts.next();
+    if p0 != Some(".snapshots") || p1 != Some("vault") {
+        return Err("Invalid path: outside vault root".to_string());
+    }
+    let id = p2.ok_or_else(|| "Invalid path: outside vault root".to_string())?;
+    let file = p3.ok_or_else(|| "Invalid path: outside vault root".to_string())?;
+    if parts.next().is_some() || id.is_empty() || id != expected_id || !file.ends_with(".md") {
+        return Err("Invalid path: outside vault root".to_string());
+    }
+    let ts = &file[..file.len() - 3];
+    if ts.len() != 14 || !ts.chars().all(|c| c.is_ascii_digit()) {
+        return Err("Invalid path: outside vault root".to_string());
+    }
+    Ok(())
+}
+
+fn decrypt_string(crypto: &CryptoState, blob_json: &str) -> Result<String, String> {
+    let blob: EncryptedBlob =
+        serde_json::from_str(blob_json).map_err(|e| format!("Invalid encrypted blob: {}", e))?;
 
     // Decrypt using session key directly
     let session = crypto.session_key.lock().unwrap();
@@ -102,7 +120,10 @@ fn decrypt_string(
         .decode(&blob.nonce)
         .map_err(|e| e.to_string())?;
 
-    use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Key, Nonce,
+    };
     let aes_key = Key::<Aes256Gcm>::from_slice(key);
     let cipher = Aes256Gcm::new(aes_key);
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -118,7 +139,10 @@ fn encrypt_string_raw(crypto: &CryptoState, plaintext: &str) -> Result<String, S
     let session = crypto.session_key.lock().unwrap();
     let key = session.as_ref().ok_or("Vault is locked")?;
 
-    use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, AeadCore, KeyInit, OsRng}};
+    use aes_gcm::{
+        aead::{Aead, AeadCore, KeyInit, OsRng},
+        Aes256Gcm, Key, Nonce,
+    };
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
 
@@ -141,21 +165,19 @@ fn encrypt_string_raw(crypto: &CryptoState, plaintext: &str) -> Result<String, S
 }
 
 fn write_raw_to_disk(vault_path: &Path, raw: &VaultNoteRaw) -> Result<(), String> {
-    let path = note_path(vault_path, &raw.id);
+    let path = note_path(vault_path, &raw.id)?;
     let content = format!(
         "---\nid: {}\nvault: true\ncreated_at: {}\nmodified_at: {}\n---\n\n{}\n\n{}\n",
-        raw.id,
-        raw.created_at,
-        raw.modified_at,
-        raw.encrypted_title,
-        raw.encrypted_body,
+        raw.id, raw.created_at, raw.modified_at, raw.encrypted_title, raw.encrypted_body,
     );
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
 fn read_raw_from_disk(path: &Path) -> Option<VaultNoteRaw> {
     let content = fs::read_to_string(path).ok()?;
-    if !content.starts_with("---") { return None; }
+    if !content.starts_with("---") {
+        return None;
+    }
     let rest = &content[3..];
     let end = rest.find("\n---")?;
     let yaml = &rest[..end];
@@ -228,9 +250,8 @@ pub fn vault_read(
     crypto: State<CryptoState>,
     id: String,
 ) -> Result<VaultNote, String> {
-    let path = note_path(&state.vault_path, &id);
-    let raw = read_raw_from_disk(&path)
-        .ok_or_else(|| format!("Vault note not found: {}", id))?;
+    let path = note_path(&state.vault_path, &id)?;
+    let raw = read_raw_from_disk(&path).ok_or_else(|| format!("Vault note not found: {}", id))?;
 
     let title = decrypt_string(&crypto, &raw.encrypted_title)?;
     let content = decrypt_string(&crypto, &raw.encrypted_body)?;
@@ -262,9 +283,8 @@ pub fn vault_write(
     title: Option<String>,
     content: Option<String>,
 ) -> Result<VaultNoteStub, String> {
-    let path = note_path(&state.vault_path, &id);
-    let raw = read_raw_from_disk(&path)
-        .ok_or_else(|| format!("Vault note not found: {}", id))?;
+    let path = note_path(&state.vault_path, &id)?;
+    let raw = read_raw_from_disk(&path).ok_or_else(|| format!("Vault note not found: {}", id))?;
 
     // Decrypt existing values to keep unchanged fields
     let existing_title = decrypt_string(&crypto, &raw.encrypted_title)?;
@@ -299,15 +319,13 @@ pub fn vault_write(
 
 /// Delete a vault note — moves to .trash (encrypted)
 #[tauri::command]
-pub fn vault_delete(
-    state: State<VaultState>,
-    id: String,
-) -> Result<(), String> {
-    let path = note_path(&state.vault_path, &id);
+pub fn vault_delete(state: State<VaultState>, id: String) -> Result<(), String> {
+    let path = note_path(&state.vault_path, &id)?;
     if !path.exists() {
         return Err(format!("Vault note not found: {}", id));
     }
-    let trash = state.vault_path.join(".trash").join("vault").join(format!("{}.md", id));
+    let trash =
+        validate_vault_relative_path(&state.vault_path, &format!(".trash/vault/{}.md", id))?;
     fs::create_dir_all(trash.parent().unwrap()).map_err(|e| e.to_string())?;
     fs::rename(&path, &trash).map_err(|e| e.to_string())
 }
@@ -320,7 +338,9 @@ pub fn vault_list(
     crypto: State<CryptoState>,
 ) -> Result<Vec<VaultNoteStub>, String> {
     let vault_dir = vault_dir(&state.vault_path);
-    if !vault_dir.exists() { return Ok(vec![]); }
+    if !vault_dir.exists() {
+        return Ok(vec![]);
+    }
 
     let mut stubs = vec![];
     for entry in fs::read_dir(&vault_dir).map_err(|e| e.to_string())? {
@@ -366,7 +386,6 @@ pub fn vault_search(
 
     // For stubs we only have title — for full search we need to read each note
     // This is intentionally slower to avoid leaking unencrypted content to SQLite
-    let vault_dir = vault_dir(&state.vault_path);
     let mut results = vec![];
 
     for stub in all {
@@ -375,7 +394,7 @@ pub fn vault_search(
             continue;
         }
         // Check body
-        let path = vault_dir.join(format!("{}.md", stub.id));
+        let path = note_path(&state.vault_path, &stub.id)?;
         if let Some(raw) = read_raw_from_disk(&path) {
             if let Ok(content) = decrypt_string(&crypto, &raw.encrypted_body) {
                 if content.to_lowercase().contains(&q) {
@@ -390,18 +409,14 @@ pub fn vault_search(
 
 /// Snapshot a vault note (encrypted snapshot)
 #[tauri::command]
-pub fn vault_snapshot(
-    state: State<VaultState>,
-    id: String,
-) -> Result<String, String> {
-    let path = note_path(&state.vault_path, &id);
+pub fn vault_snapshot(state: State<VaultState>, id: String) -> Result<String, String> {
+    let path = note_path(&state.vault_path, &id)?;
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let ts = Utc::now().format("%Y%m%d%H%M%S").to_string();
-    let snapshot_path = state.vault_path
-        .join(".snapshots")
-        .join("vault")
-        .join(&id)
-        .join(format!("{}.md", ts));
+    let snapshot_path = validate_vault_relative_path(
+        &state.vault_path,
+        &format!(".snapshots/vault/{}/{}.md", id, ts),
+    )?;
 
     fs::create_dir_all(snapshot_path.parent().unwrap()).map_err(|e| e.to_string())?;
     fs::write(&snapshot_path, content).map_err(|e| e.to_string())?;
@@ -416,9 +431,10 @@ pub fn vault_restore(
     id: String,
     snapshot_id: String,
 ) -> Result<(), String> {
-    let snapshot_path = state.vault_path.join(&snapshot_id);
+    validate_vault_snapshot_id(&snapshot_id, &id)?;
+    let snapshot_path = validate_vault_relative_path(&state.vault_path, &snapshot_id)?;
     let content = fs::read_to_string(&snapshot_path).map_err(|e| e.to_string())?;
-    let path = note_path(&state.vault_path, &id);
+    let path = note_path(&state.vault_path, &id)?;
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
@@ -426,7 +442,9 @@ pub fn vault_restore(
 #[tauri::command]
 pub fn vault_count(state: State<VaultState>) -> Result<usize, String> {
     let vault_dir = vault_dir(&state.vault_path);
-    if !vault_dir.exists() { return Ok(0); }
+    if !vault_dir.exists() {
+        return Ok(0);
+    }
     let count = fs::read_dir(&vault_dir)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
