@@ -10,4 +10,6 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
+## Build/Migration Docs
 
+- [Tauri + Koog Migration Audit Tracker](docs/tauri-koog-migration-audit.md)
