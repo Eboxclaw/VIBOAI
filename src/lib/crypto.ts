@@ -19,6 +19,24 @@ async function getInvoke(): Promise<InvokeFn> {
   if (!invokeFnPromise) {
     invokeFnPromise = import("@tauri-apps/api/core").then((mod) => mod.invoke as InvokeFn);
   }
+  return invokeFnPromise;
+}
+
+function mapCryptoError(error: unknown, command: string): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = rawMessage.toLowerCase();
+
+  if (message.includes("wrong pin")) return "Incorrect PIN.";
+  if (message.includes("no pin set")) return "No PIN is configured yet.";
+  if (message.includes("vault is locked")) return "Vault is locked. Unlock with your PIN first.";
+  if (message.includes("decryption failed")) return "Unable to decrypt note data.";
+  if (message.includes("biometric")) return "Biometric unlock failed. Please use your PIN.";
+  if (message.includes("invalid key length")) return "Biometric key was invalid.";
+
+  if (command === "crypto_set_pin") return "Unable to set PIN. Please try again.";
+  if (command === "crypto_unlock") return "Unable to unlock vault. Please try again.";
+  if (command === "crypto_encrypt_note") return "Unable to encrypt note.";
+  if (command === "crypto_decrypt_note") return "Unable to decrypt note.";
 
   return invokeFnPromise;
 }
@@ -90,4 +108,28 @@ export function loadAgentNotes(): string {
 
 export function saveAgentNotes(data: string): void {
   localStorage.setItem(AGENT_NOTES_KEY, data);
+}
+
+export async function enableBiometric(enabled: boolean): Promise<void> {
+  await invokeCrypto("crypto_enable_biometric", { enabled });
+}
+
+export async function unlockWithBiometric(keyBytes: number[]): Promise<VaultStatus> {
+  return invokeCrypto<VaultStatus>("crypto_unlock_biometric", { keyBytes });
+}
+
+export async function keystoreSet(keyName: string, secret: string): Promise<void> {
+  await invokeCrypto("keystore_set", { keyName, secret });
+}
+
+export async function keystoreHas(keyName: string): Promise<boolean> {
+  return invokeCrypto<boolean>("keystore_has", { keyName });
+}
+
+export async function keystoreDelete(keyName: string): Promise<void> {
+  await invokeCrypto("keystore_delete", { keyName });
+}
+
+export async function keystoreList(): Promise<string[]> {
+  return invokeCrypto<string[]>("keystore_list");
 }

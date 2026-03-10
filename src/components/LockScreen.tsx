@@ -48,19 +48,23 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
     }
 
     if (isSetup) {
-      const valid = await verifyPin(pin);
-      if (valid) {
-        setFailedAttempts(0);
-        setRetryAt(0);
-        onUnlock(pin);
-      } else {
-        const nextFailedAttempts = failedAttempts + 1;
-        const backoffMs = Math.min(15000, nextFailedAttempts * 1000);
-        setFailedAttempts(nextFailedAttempts);
-        setRetryAt(Date.now() + backoffMs);
-        setNow(Date.now());
-        setError(`Incorrect PIN. Try again in ${Math.ceil(backoffMs / 1000)}s.`);
-        setPin("");
+      try {
+        const valid = await verifyPin(pin);
+        if (valid) {
+          setFailedAttempts(0);
+          setRetryAt(0);
+          onUnlock(pin);
+        } else {
+          const nextFailedAttempts = failedAttempts + 1;
+          const backoffMs = Math.min(15000, nextFailedAttempts * 1000);
+          setFailedAttempts(nextFailedAttempts);
+          setRetryAt(Date.now() + backoffMs);
+          setNow(Date.now());
+          setError(`Incorrect PIN. Try again in ${Math.ceil(backoffMs / 1000)}s.`);
+          setPin("");
+        }
+      } catch (unlockError) {
+        setError(unlockError instanceof Error ? unlockError.message : "Unable to unlock vault.");
       }
       return;
     }

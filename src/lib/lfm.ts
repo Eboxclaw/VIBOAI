@@ -6,7 +6,6 @@
 import {
   getActiveProvider,
   getActiveLocalModel,
-  getLfmEndpoint,
   getCloudKeys,
   CLOUD_PROVIDERS,
   getDownloadedModels,
@@ -26,43 +25,37 @@ const SYSTEM_PROMPT: LfmMessage = {
 export function isLfmConfigured(): boolean {
   const provider = getActiveProvider();
   if (provider === "local") {
-    return !!getLfmEndpoint() && getDownloadedModels().length > 0;
+    return getDownloadedModels().length > 0;
   }
   const keys = getCloudKeys();
-  return !!(keys[provider]);
+  return !!keys[provider];
 }
 
 export function getActiveProviderLabel(): string {
   const provider = getActiveProvider();
   if (provider === "local") return "LFM Local";
   const found = CLOUD_PROVIDERS.find(p => p.id === provider);
-  return found?.name || provider;
+  return found && found.name ? found.name : provider;
 }
 
-function getEndpointAndHeaders(provider: ActiveProvider): { url: string; headers: Record<string, string>; model?: string } {
-  if (provider === "local") {
-    const endpoint = getLfmEndpoint();
-    return {
-      url: `${endpoint.replace(/\/+$/, "")}/v1/chat/completions`,
-      headers: { "Content-Type": "application/json" },
-      model: getActiveLocalModel(),
-    };
-  }
+type ProviderKind = "leap" | "ollama" | "anthropic" | "open_router" | "kimi" | "minimax";
 
-  const keys = getCloudKeys();
-  const providerConfig = CLOUD_PROVIDERS.find(p => p.id === provider);
+type StreamDeltaPayload = { requestId: string; delta: string };
+type StreamDonePayload = { requestId: string };
+type StreamErrorPayload = { requestId: string; error: string };
 
-  if (provider === "ollama") {
-    const host = keys.ollama || "http://localhost:11434";
-    return {
-      url: `${host.replace(/\/+$/, "")}/v1/chat/completions`,
-      headers: { "Content-Type": "application/json" },
-    };
-  }
+const DEFAULT_MODELS: Record<ActiveProvider, string> = {
+  local: "lfm2.5-1.2b-instruct",
+  ollama: "llama3",
+  anthropic: "claude-sonnet-4-20250514",
+  openrouter: "meta-llama/llama-3.1-8b-instruct",
+  kimi: "moonshot-v1-8k",
+  minimax: "abab6.5s-chat",
+};
 
   if (provider === "anthropic") {
     return {
-      url: `${providerConfig?.baseUrl}/messages`,
+      url: `${providerConfig && providerConfig.baseUrl ? providerConfig.baseUrl : ""}/messages`,
       headers: {
         "Content-Type": "application/json",
         "x-api-key": keys.anthropic || "",
@@ -73,7 +66,7 @@ function getEndpointAndHeaders(provider: ActiveProvider): { url: string; headers
 
   // OpenRouter, Kimi, MiniMax — all OpenAI-compatible
   return {
-    url: `${providerConfig?.baseUrl}/chat/completions`,
+    url: `${providerConfig && providerConfig.baseUrl ? providerConfig.baseUrl : ""}/chat/completions`,
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${keys[provider] || ""}`,
@@ -99,46 +92,44 @@ export async function streamLfmChat({
 }) {
   const provider = getActiveProvider();
 
-  if (provider === "local" && !getLfmEndpoint()) {
-    onError("LEAP server not configured. Go to Settings → Local Models to set the endpoint.");
+  if (!hasTauriRuntime()) {
+    onError("Tauri runtime not available.");
     return;
   }
 
-  const { url, headers, model } = getEndpointAndHeaders(provider);
-
   try {
-    const body: any = {
-      messages: [SYSTEM_PROMPT, ...messages],
-      stream: true,
+    const { invoke } = await import("@tauri-apps/api/core");
+
+    const request = {
+      provider: providerToKind(provider),
+      model: getProviderModel(provider),
+      messages,
+      system: SYSTEM_PROMPT.content,
       max_tokens: 1024,
+      temperature: 0.7,
+      api_key_name: providerApiKeyName(provider),
     };
 
-    if (model) body.model = model;
+    const requestId = await invoke<string>("providers_stream", { request });
 
-    // Anthropic uses a different body format
-    if (provider === "anthropic") {
-      body.model = "claude-sonnet-4-20250514";
-      body.system = SYSTEM_PROMPT.content;
-      body.messages = messages.map(m => ({ role: m.role, content: m.content }));
-    }
+    let finished = false;
+    let cleanup = () => {};
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal,
+    const finalize = (cb: () => void) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      cb();
+    };
+
+    cleanup = await subscribeStreamEvents(requestId, {
+      onDelta: ({ delta }) => {
+        if (finished || !delta) return;
+        onDelta(delta);
+      },
+      onDone: () => finalize(onDone),
+      onError: ({ error }) => finalize(() => onError(error || `Cannot reach ${getActiveProviderLabel()}.`)),
     });
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      onError(`${getActiveProviderLabel()} error (${resp.status}): ${text || "Connection failed"}`);
-      return;
-    }
-
-    if (!resp.body) {
-      onError("No response body");
-      return;
-    }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -164,10 +155,13 @@ export async function streamLfmChat({
         try {
           const parsed = JSON.parse(jsonStr);
           // Handle both OpenAI and Anthropic streaming formats
-          const content =
-            parsed.choices?.[0]?.delta?.content ||
-            parsed.delta?.text ||
-            "";
+          const choices = parsed && parsed.choices;
+          const firstChoice = Array.isArray(choices) ? choices[0] : undefined;
+          const delta = firstChoice && firstChoice.delta ? firstChoice.delta : undefined;
+          const deltaContent = delta && delta.content ? delta.content : "";
+          const parsedDelta = parsed && parsed.delta ? parsed.delta : undefined;
+          const deltaText = parsedDelta && parsedDelta.text ? parsedDelta.text : "";
+          const content = deltaContent || deltaText || "";
           if (content) onDelta(content);
         } catch {
           buffer = line + "\n" + buffer;
@@ -175,8 +169,6 @@ export async function streamLfmChat({
         }
       }
     }
-
-    onDone();
   } catch (err: any) {
     if (err.name === "AbortError") {
       onDone();

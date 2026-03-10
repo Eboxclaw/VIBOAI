@@ -31,6 +31,19 @@ export function SettingsView() {
     localStorage.setItem(TOR_TOGGLE_KEY, String(torEnabled));
   }, [torEnabled]);
 
+  useEffect(() => {
+    const loadPinStatus = async () => {
+      try {
+        const pinStatus = await isPinSetup();
+        setHasPin(pinStatus);
+      } catch (error) {
+        console.warn("Failed to read vault status", error);
+      }
+    };
+
+    void loadPinStatus();
+  }, []);
+
   const exportNotes = () => {
     const blob = new Blob([JSON.stringify(notes, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);

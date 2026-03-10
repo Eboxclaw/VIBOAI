@@ -104,7 +104,7 @@ export function ChatAssistant({ compact = false }: { compact?: boolean }) {
           assistantContent += chunk;
           setMessages((prev) => {
             const last = prev[prev.length - 1];
-            if (last?.id === assistantId) {
+            if (last && last.id === assistantId) {
               return prev.map((m) => (m.id === assistantId ? { ...m, content: assistantContent } : m));
             }
             return [...prev, { id: assistantId, role: "assistant", content: assistantContent }];
@@ -217,7 +217,7 @@ export function ChatAssistant({ compact = false }: { compact?: boolean }) {
         {quickActions.map((qa) => (
           <button
             key={qa.label}
-            onClick={() => { qa.action(); inputRef.current?.focus(); }}
+            onClick={() => { qa.action(); if (inputRef.current) inputRef.current.focus(); }}
             className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground bg-muted hover:bg-accent hover:text-foreground rounded-full px-2.5 py-1 transition-colors"
           >
             <qa.icon className="h-3 w-3" />
