@@ -341,9 +341,8 @@ pub fn crypto_decrypt_note(
 
 /// Store an API key or OAuth token — encrypted with vault session key
 /// Vault must be unlocked.
-#[tauri::command]
-pub fn crypto_keystore_set(
-    state: tauri::State<CryptoState>,
+pub fn keystore_set_internal(
+    state: &CryptoState,
     key_name: String,           // e.g. "anthropic_api_key", "google_oauth_token"
     secret: String,
     category: Option<String>,   // "provider_api_key" | "oauth_token" | "custom"
@@ -363,10 +362,21 @@ pub fn crypto_keystore_set(
     Ok(())
 }
 
-/// Retrieve a secret from keystore — vault must be unlocked
+/// Store an API key or OAuth token — encrypted with vault session key
+/// Vault must be unlocked.
 #[tauri::command]
-pub fn crypto_keystore_get(
+pub fn crypto_keystore_set(
     state: tauri::State<CryptoState>,
+    key_name: String,           // e.g. "anthropic_api_key", "google_oauth_token"
+    secret: String,
+    category: Option<String>,   // "provider_api_key" | "oauth_token" | "custom"
+) -> Result<(), String> {
+    keystore_set_internal(&state, key_name, secret, category)
+}
+
+/// Retrieve a secret from keystore — vault must be unlocked
+pub fn keystore_get_internal(
+    state: &CryptoState,
     key_name: String,
 ) -> Result<String, String> {
     let session = state.session_key.lock().unwrap();
@@ -387,16 +397,33 @@ pub fn crypto_keystore_get(
     String::from_utf8(plaintext).map_err(|e| e.to_string())
 }
 
-/// Delete a keystore entry
+/// Retrieve a secret from keystore — vault must be unlocked
 #[tauri::command]
-pub fn crypto_keystore_delete(
+pub fn crypto_keystore_get(
     state: tauri::State<CryptoState>,
+    key_name: String,
+) -> Result<String, String> {
+    keystore_get_internal(&state, key_name)
+}
+
+/// Delete a keystore entry
+pub fn keystore_delete_internal(
+    state: &CryptoState,
     key_name: String,
 ) -> Result<(), String> {
     let db = state.db.lock().unwrap();
     db.execute("DELETE FROM keystore WHERE key_name = ?1", params![key_name])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Delete a keystore entry
+#[tauri::command]
+pub fn crypto_keystore_delete(
+    state: tauri::State<CryptoState>,
+    key_name: String,
+) -> Result<(), String> {
+    keystore_delete_internal(&state, key_name)
 }
 
 /// List keystore entries (names + categories only, no secrets)

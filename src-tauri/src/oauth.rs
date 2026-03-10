@@ -108,8 +108,8 @@ fn token_key(provider: &str, kind: &str) -> String {
 }
 
 fn store_token(crypto: &crate::core::crypto::CryptoState, provider: &str, kind: &str, value: &str) -> Result<(), String> {
-    crate::core::crypto::crypto_keystore_set(
-        unsafe { std::mem::transmute(crypto) },
+    crate::core::crypto::keystore_set_internal(
+        crypto,
         token_key(provider, kind),
         value.to_string(),
         Some("oauth_token".to_string()),
@@ -117,15 +117,15 @@ fn store_token(crypto: &crate::core::crypto::CryptoState, provider: &str, kind: 
 }
 
 fn load_token(crypto: &crate::core::crypto::CryptoState, provider: &str, kind: &str) -> Result<String, String> {
-    crate::core::crypto::crypto_keystore_get(
-        unsafe { std::mem::transmute(crypto) },
+    crate::core::crypto::keystore_get_internal(
+        crypto,
         token_key(provider, kind),
     ).map_err(|_| format!("{} not authenticated — call oauth_auth_start first", provider))
 }
 
 fn delete_token(crypto: &crate::core::crypto::CryptoState, provider: &str, kind: &str) {
-    let _ = crate::core::crypto::crypto_keystore_delete(
-        unsafe { std::mem::transmute(crypto) },
+    let _ = crate::core::crypto::keystore_delete_internal(
+        crypto,
         token_key(provider, kind),
     );
 }
