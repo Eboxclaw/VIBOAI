@@ -1,7 +1,6 @@
-/**
- * LFM Unified Chat Client
- * Routes to local LFM (LEAP) or cloud providers based on active config.
- */
+// src/lib/lfm.ts
+// Routes to Rust providers.rs — no API keys in frontend.
+// Streaming via Tauri "llm-delta" events.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -18,23 +17,22 @@ export interface LfmMessage {
   content: string;
 }
 
-interface LlmDeltaEvent {
-  request_id: string;
-  delta: string;
-}
-
-interface LlmDoneEvent {
-  request_id: string;
-}
-
-interface LlmErrorEvent {
-  request_id: string;
-  error: string;
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  type: "local" | "cloud";
+  configured: boolean;
+  reachable: boolean;
 }
 
 const SYSTEM_PROMPT: LfmMessage = {
   role: "system",
-  content: `You are ViBo Assistant, a private AI running locally via LFM. You help users organize notes, create tasks, and think through ideas. You are concise, helpful, and respect user privacy — all data stays on-device. If the user says "new note: <title>" or "new task: <title>", acknowledge it and confirm creation.`,
+  content: [
+    "You are ViBo Assistant, a private AI running locally on-device.",
+    "You help users organise notes, create tasks, and think through ideas.",
+    "You are concise, helpful, and respect user privacy — all data stays on-device.",
+    "If the user says 'new note: <title>' or 'new task: <title>', acknowledge and confirm creation.",
+  ].join(" "),
 };
 
 const DEFAULT_MODELS: Record<ActiveProvider, string> = {
@@ -65,10 +63,7 @@ function toProviderKind(provider: ActiveProvider): "leap" | "ollama" | "anthropi
 }
 
 function getModelForProvider(provider: ActiveProvider): string {
-  if (provider === "local") {
-    return getActiveLocalModel();
-  }
-  return DEFAULT_MODELS[provider];
+  return provider === "local" ? getActiveLocalModel() : DEFAULT_MODELS[provider];
 }
 
 export function isLfmConfigured(): boolean {
@@ -82,13 +77,24 @@ export function isLfmConfigured(): boolean {
 export function getActiveProviderLabel(): string {
   const provider = getActiveProvider();
   if (provider === "local") return "LFM Local";
-  const found = CLOUD_PROVIDERS.find(p => p.id === provider);
-  return found && found.name ? found.name : provider;
+  const found = CLOUD_PROVIDERS.find((p) => p.id === provider);
+  return found?.name || provider;
 }
 
-/**
- * Stream a chat completion from the configured provider.
- */
+export async function listProviders(): Promise<ProviderInfo[]> {
+  return invoke<ProviderInfo[]>("providers_list");
+}
+
+export async function torStatus(): Promise<boolean> {
+  return invoke<boolean>("providers_tor_status");
+}
+
+export async function setTor(enabled: boolean): Promise<void> {
+  await invoke("providers_tor_set", { enabled });
+}
+
+let streamCounter = 0;
+
 export async function streamLfmChat({
   messages,
   onDelta,
@@ -101,7 +107,7 @@ export async function streamLfmChat({
   onDone: () => void;
   onError: (err: string) => void;
   signal?: AbortSignal;
-}) {
+}): Promise<void> {
   if (signal?.aborted) {
     onDone();
     return;
@@ -111,14 +117,14 @@ export async function streamLfmChat({
   const model = getModelForProvider(provider);
   const apiKeyName = API_KEY_NAMES[provider];
 
-  const unlisteners: Array<() => void> = [];
+  streamCounter += 1;
   let requestId = "";
   let settled = false;
+  const unlisteners: Array<() => void> = [];
 
   const cleanup = () => {
     while (unlisteners.length > 0) {
-      const unlisten = unlisteners.pop();
-      unlisten?.();
+      unlisteners.pop()?.();
     }
     if (signal && abortHandler) {
       signal.removeEventListener("abort", abortHandler);
@@ -140,29 +146,25 @@ export async function streamLfmChat({
   };
 
   const abortHandler = () => settleDone();
-  if (signal) {
-    signal.addEventListener("abort", abortHandler);
-  }
+  signal?.addEventListener("abort", abortHandler);
 
   try {
     unlisteners.push(
-      await listen<LlmDeltaEvent>("llm-delta", (event) => {
+      await listen<{ request_id: string; delta: string }>("llm-delta", (event) => {
         if (event.payload.request_id !== requestId || settled) return;
-        if (event.payload.delta) {
-          onDelta(event.payload.delta);
-        }
+        onDelta(event.payload.delta || "");
       }),
     );
 
     unlisteners.push(
-      await listen<LlmDoneEvent>("llm-done", (event) => {
+      await listen<{ request_id: string }>("llm-done", (event) => {
         if (event.payload.request_id !== requestId || settled) return;
         settleDone();
       }),
     );
 
     unlisteners.push(
-      await listen<LlmErrorEvent>("llm-error", (event) => {
+      await listen<{ request_id: string; error: string }>("llm-error", (event) => {
         if (event.payload.request_id !== requestId || settled) return;
         settleError(event.payload.error || `${getActiveProviderLabel()} error`);
       }),
@@ -183,7 +185,7 @@ export async function streamLfmChat({
     if (signal?.aborted) {
       settleDone();
     }
-  } catch (err) {
+  } catch (err: unknown) {
     settleError(err instanceof Error ? err.message : `Cannot reach ${getActiveProviderLabel()}. Is it running?`);
   }
 }
