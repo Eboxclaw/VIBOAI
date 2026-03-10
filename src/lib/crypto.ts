@@ -2,7 +2,19 @@
 
 const SALT_KEY = "zettel-crypto-salt";
 const PIN_HASH_KEY = "zettel-pin-hash";
+const PIN_VERIFIER_META_KEY = "zettel-pin-verifier-meta";
+const PIN_VERIFIER_SALT_KEY = "zettel-pin-verifier-salt";
 const ENCRYPTED_DATA_KEY = "zettel-encrypted-notes";
+
+type PinVerifierMeta = {
+  version: 1;
+  kdf: "pbkdf2";
+  iterations: number;
+  digest: "SHA-256";
+  derivedBits: number;
+  verifier: string;
+  saltKey: typeof PIN_VERIFIER_SALT_KEY;
+};
 
 function getOrCreateSalt(): Uint8Array {
   const stored = localStorage.getItem(SALT_KEY);
@@ -33,20 +45,104 @@ async function hashPin(pin: string): Promise<string> {
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+function isPinVerifierMeta(value: unknown): value is PinVerifierMeta {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<PinVerifierMeta>;
+  return (
+    candidate.version === 1 &&
+    candidate.kdf === "pbkdf2" &&
+    typeof candidate.iterations === "number" &&
+    candidate.digest === "SHA-256" &&
+    typeof candidate.derivedBits === "number" &&
+    typeof candidate.verifier === "string" &&
+    candidate.saltKey === PIN_VERIFIER_SALT_KEY
+  );
+}
+
+async function derivePinVerifier(pin: string, salt: Uint8Array, iterations: number, digest: "SHA-256", derivedBits: number): Promise<string> {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(pin),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const derived = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations, hash: digest },
+    keyMaterial,
+    derivedBits
+  );
+  return Array.from(new Uint8Array(derived)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function getVerifierSalt(meta: PinVerifierMeta): Uint8Array | null {
+  const storedSalt = localStorage.getItem(meta.saltKey);
+  if (!storedSalt) {
+    return null;
+  }
+
+  try {
+    return new Uint8Array(JSON.parse(storedSalt));
+  } catch {
+    return null;
+  }
+}
+
 export async function setupPin(pin: string): Promise<void> {
-  const hash = await hashPin(pin);
-  localStorage.setItem(PIN_HASH_KEY, hash);
+  const verifierSalt = crypto.getRandomValues(new Uint8Array(16));
+  const meta: PinVerifierMeta = {
+    version: 1,
+    kdf: "pbkdf2",
+    iterations: 210000,
+    digest: "SHA-256",
+    derivedBits: 256,
+    verifier: await derivePinVerifier(pin, verifierSalt, 210000, "SHA-256", 256),
+    saltKey: PIN_VERIFIER_SALT_KEY,
+  };
+
+  localStorage.setItem(PIN_VERIFIER_SALT_KEY, JSON.stringify(Array.from(verifierSalt)));
+  localStorage.setItem(PIN_VERIFIER_META_KEY, JSON.stringify(meta));
+  localStorage.removeItem(PIN_HASH_KEY);
 }
 
 export async function verifyPin(pin: string): Promise<boolean> {
-  const stored = localStorage.getItem(PIN_HASH_KEY);
-  if (!stored) return false;
-  const hash = await hashPin(pin);
-  return hash === stored;
+  const storedMeta = localStorage.getItem(PIN_VERIFIER_META_KEY);
+  if (storedMeta) {
+    try {
+      const parsed = JSON.parse(storedMeta);
+      if (isPinVerifierMeta(parsed)) {
+        const salt = getVerifierSalt(parsed);
+        if (!salt) {
+          return false;
+        }
+
+        const derivedVerifier = await derivePinVerifier(pin, salt, parsed.iterations, parsed.digest, parsed.derivedBits);
+        return derivedVerifier === parsed.verifier;
+      }
+    } catch {
+      // Fallback to legacy verifier format if metadata is malformed.
+    }
+  }
+
+  const legacyHash = localStorage.getItem(PIN_HASH_KEY);
+  if (!legacyHash) {
+    return false;
+  }
+
+  const legacyDerived = await hashPin(pin);
+  const isLegacyValid = legacyDerived === legacyHash;
+  if (isLegacyValid) {
+    await setupPin(pin);
+  }
+  return isLegacyValid;
 }
 
 export function isPinSetup(): boolean {
-  return !!localStorage.getItem(PIN_HASH_KEY);
+  return !!localStorage.getItem(PIN_VERIFIER_META_KEY) || !!localStorage.getItem(PIN_HASH_KEY);
 }
 
 export async function encryptData(data: string, pin: string): Promise<string> {
