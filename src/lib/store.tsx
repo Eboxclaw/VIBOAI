@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { Note, KanbanColumn, DEFAULT_COLUMNS, ViewMode } from "./types";
 import { encryptData, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
+import { encryptData, decryptData, getEncryptedNotes, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
 import { tauriClient } from "./tauriClient";
 
 interface StoreContextType {
@@ -49,6 +50,18 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
   const pinRef = useRef(pin);
   const tauriAvailable = tauriClient.isAvailable();
 
+  useEffect(() => {
+    const loadNotesFromTauri = async () => {
+      const tauriNotes = await tauriClient.listNotes();
+      if (tauriNotes) {
+        setNotes(tauriNotes);
+      }
+    };
+
+    loadNotesFromTauri();
+  }, []);
+
+  // Encrypt and save notes whenever they change
   useEffect(() => {
     if (!tauriAvailable) return;
 

@@ -89,6 +89,14 @@ function tauriNoteToUiNote(note: TauriNote): Note {
   };
 }
 
+function resolveTauriId(note: Note): string {
+  const customId = noteToFrontmatter(note).custom.viboNoteId;
+  if (typeof customId === "string" && customId.endsWith(".md")) {
+    return customId;
+  }
+  return fileNameFromNoteId(note.id);
+}
+
 export const tauriClient = {
   isAvailable: hasTauriRuntime,
   async listNotes(): Promise<Note[] | null> {
@@ -111,6 +119,7 @@ export const tauriClient = {
   },
   async updateNote(note: Note): Promise<void> {
     const id = fileNameFromNoteId(note.id);
+    const id = resolveTauriId(note);
     await invokeCommand("note_patch", { id, body: note.content });
     await invokeCommand("note_set_frontmatter", { id, frontmatter: noteToFrontmatter(note) });
   },
