@@ -120,7 +120,7 @@ export function NoteEditor({ noteId, onClose }: { noteId: string; onClose?: () =
           size="icon"
           onClick={() => {
             deleteNote(noteId);
-            onClose?.();
+            if (onClose) onClose();
           }}
           className="text-destructive hover:text-destructive"
         >

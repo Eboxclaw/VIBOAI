@@ -54,14 +54,14 @@ export function KanbanView() {
             <div className="flex items-center justify-between px-2.5 py-2 border-b border-border">
               <h3 className="font-semibold text-xs text-foreground">{col.title}</h3>
               <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
-                {notesByColumn[col.id]?.length || 0}
+                {notesByColumn[col.id] ? notesByColumn[col.id].length : 0}
               </Badge>
             </div>
 
             {/* Cards */}
             <ScrollArea className="flex-1 p-1.5">
               <div className="space-y-1.5">
-                {notesByColumn[col.id]?.map((note) => (
+                {(notesByColumn[col.id] ? notesByColumn[col.id] : []).map((note) => (
                   <div
                     key={note.id}
                     draggable

@@ -36,7 +36,7 @@ export function getActiveProviderLabel(): string {
   const provider = getActiveProvider();
   if (provider === "local") return "LFM Local";
   const found = CLOUD_PROVIDERS.find(p => p.id === provider);
-  return found?.name || provider;
+  return found && found.name ? found.name : provider;
 }
 
 function getEndpointAndHeaders(provider: ActiveProvider): { url: string; headers: Record<string, string>; model?: string } {
@@ -62,7 +62,7 @@ function getEndpointAndHeaders(provider: ActiveProvider): { url: string; headers
 
   if (provider === "anthropic") {
     return {
-      url: `${providerConfig?.baseUrl}/messages`,
+      url: `${providerConfig && providerConfig.baseUrl ? providerConfig.baseUrl : ""}/messages`,
       headers: {
         "Content-Type": "application/json",
         "x-api-key": keys.anthropic || "",
@@ -73,7 +73,7 @@ function getEndpointAndHeaders(provider: ActiveProvider): { url: string; headers
 
   // OpenRouter, Kimi, MiniMax — all OpenAI-compatible
   return {
-    url: `${providerConfig?.baseUrl}/chat/completions`,
+    url: `${providerConfig && providerConfig.baseUrl ? providerConfig.baseUrl : ""}/chat/completions`,
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${keys[provider] || ""}`,
@@ -164,10 +164,13 @@ export async function streamLfmChat({
         try {
           const parsed = JSON.parse(jsonStr);
           // Handle both OpenAI and Anthropic streaming formats
-          const content =
-            parsed.choices?.[0]?.delta?.content ||
-            parsed.delta?.text ||
-            "";
+          const choices = parsed && parsed.choices;
+          const firstChoice = Array.isArray(choices) ? choices[0] : undefined;
+          const delta = firstChoice && firstChoice.delta ? firstChoice.delta : undefined;
+          const deltaContent = delta && delta.content ? delta.content : "";
+          const parsedDelta = parsed && parsed.delta ? parsed.delta : undefined;
+          const deltaText = parsedDelta && parsedDelta.text ? parsedDelta.text : "";
+          const content = deltaContent || deltaText || "";
           if (content) onDelta(content);
         } catch {
           buffer = line + "\n" + buffer;

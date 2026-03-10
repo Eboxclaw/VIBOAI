@@ -30,8 +30,8 @@ export function KnowledgeGraph() {
   // Build graph data
   useEffect(() => {
     const { nodes, edges } = buildGraph(notes);
-    const w = canvasRef.current?.width || 800;
-    const h = canvasRef.current?.height || 600;
+    const w = canvasRef.current && canvasRef.current.width ? canvasRef.current.width : 800;
+    const h = canvasRef.current && canvasRef.current.height ? canvasRef.current.height : 600;
 
     nodesRef.current = nodes.map((n, i) => ({
       ...n,
@@ -68,8 +68,8 @@ export function KnowledgeGraph() {
     if (!ctx) return;
 
     const resize = () => {
-      canvas.width = canvas.parentElement?.clientWidth || 800;
-      canvas.height = canvas.parentElement?.clientHeight || 600;
+      canvas.width = canvas.parentElement && canvas.parentElement.clientWidth ? canvas.parentElement.clientWidth : 800;
+      canvas.height = canvas.parentElement && canvas.parentElement.clientHeight ? canvas.parentElement.clientHeight : 600;
     };
     resize();
     window.addEventListener("resize", resize);
@@ -202,7 +202,7 @@ export function KnowledgeGraph() {
   // Mouse interactions
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      const rect = canvasRef.current?.getBoundingClientRect();
+      const rect = canvasRef.current ? canvasRef.current.getBoundingClientRect() : null;
       if (!rect) return;
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -228,7 +228,7 @@ export function KnowledgeGraph() {
       }
 
       const node = findNodeAt(x, y);
-      setHoveredId(node?.id || null);
+      setHoveredId(node ? node.id : null);
       if (canvasRef.current) {
         canvasRef.current.style.cursor = node ? "pointer" : "grab";
       }
@@ -238,7 +238,7 @@ export function KnowledgeGraph() {
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      const rect = canvasRef.current?.getBoundingClientRect();
+      const rect = canvasRef.current ? canvasRef.current.getBoundingClientRect() : null;
       if (!rect) return;
       const { x, y } = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
       const node = findNodeAt(x, y);
@@ -260,7 +260,7 @@ export function KnowledgeGraph() {
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      const rect = canvasRef.current?.getBoundingClientRect();
+      const rect = canvasRef.current ? canvasRef.current.getBoundingClientRect() : null;
       if (!rect) return;
       const { x, y } = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
       const node = findNodeAt(x, y);

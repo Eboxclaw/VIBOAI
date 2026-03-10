@@ -41,7 +41,7 @@ export function NotebookView() {
             <ArrowLeft className="h-4 w-4" />
           </button>
           <span className="text-sm font-medium text-foreground truncate">
-            {notes.find((n) => n.id === selectedNoteId)?.title || "Note"}
+            {(() => { const selected = notes.find((n) => n.id === selectedNoteId); return selected && selected.title ? selected.title : "Note"; })()}
           </span>
         </div>
         <div className="flex-1 overflow-hidden">
