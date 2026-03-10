@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { Note, KanbanColumn, DEFAULT_COLUMNS, ViewMode } from "./types";
-import { encryptData, decryptData, getEncryptedNotes, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
+import { encryptData, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
+import { tauriClient } from "./tauriClient";
 
 interface StoreContextType {
   notes: Note[];
@@ -46,9 +47,25 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
   const [activeView, setActiveView] = useState<ViewMode>("dashboard");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const pinRef = useRef(pin);
+  const tauriAvailable = tauriClient.isAvailable();
 
-  // Encrypt and save notes whenever they change
   useEffect(() => {
+    if (!tauriAvailable) return;
+
+    const loadNotesFromTauri = async () => {
+      const tauriNotes = await tauriClient.listNotes();
+      if (tauriNotes) {
+        setNotes(tauriNotes);
+      }
+    };
+
+    void loadNotesFromTauri();
+  }, [tauriAvailable]);
+
+  // Keep browser-local persistence only for non-Tauri runtime.
+  useEffect(() => {
+    if (tauriAvailable) return;
+
     const save = async () => {
       try {
         const encrypted = await encryptData(JSON.stringify(notes), pinRef.current);
@@ -57,8 +74,8 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
         console.error("Failed to encrypt notes:", e);
       }
     };
-    save();
-  }, [notes]);
+    void save();
+  }, [notes, tauriAvailable]);
 
   // Save agent notes (unencrypted — agents always have access)
   useEffect(() => {
@@ -83,28 +100,40 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
     };
     setNotes((prev) => [note, ...prev]);
     setSelectedNoteId(note.id);
+    void tauriClient.createNote(note);
     return note;
   }, []);
 
   const updateNote = useCallback((id: string, updates: Partial<Note>) => {
-    setNotes((prev) =>
-      prev.map((n) =>
+    setNotes((prev) => {
+      const nextNotes = prev.map((n) =>
         n.id === id ? { ...n, ...updates, updatedAt: new Date().toISOString() } : n
-      )
-    );
+      );
+      const updated = nextNotes.find((n) => n.id === id);
+      if (updated) {
+        void tauriClient.updateNote(updated);
+      }
+      return nextNotes;
+    });
   }, []);
 
   const deleteNote = useCallback((id: string) => {
     setNotes((prev) => prev.filter((n) => n.id !== id));
     setSelectedNoteId((prev) => (prev === id ? null : prev));
+    void tauriClient.deleteNote(id);
   }, []);
 
   const moveNote = useCallback((id: string, column: string, position: number) => {
-    setNotes((prev) =>
-      prev.map((n) =>
+    setNotes((prev) => {
+      const nextNotes = prev.map((n) =>
         n.id === id ? { ...n, column, position, updatedAt: new Date().toISOString() } : n
-      )
-    );
+      );
+      const moved = nextNotes.find((n) => n.id === id);
+      if (moved) {
+        void tauriClient.updateNote(moved);
+      }
+      return nextNotes;
+    });
   }, []);
 
   const selectNote = useCallback((id: string | null) => {
