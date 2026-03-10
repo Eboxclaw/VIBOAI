@@ -1,10 +1,10 @@
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
-export interface VaultStatus {
+type VaultStatus = {
   is_locked: boolean;
   has_pin: boolean;
   biometric_enabled: boolean;
-}
+};
 
 type EncryptedBlob = {
   nonce: string;
@@ -38,20 +38,16 @@ function mapCryptoError(error: unknown, command: string): string {
   if (command === "crypto_encrypt_note") return "Unable to encrypt note.";
   if (command === "crypto_decrypt_note") return "Unable to decrypt note.";
 
-  return "A secure vault operation failed. Please try again.";
+  return invokeFnPromise;
 }
 
-async function invokeCrypto<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+async function invokeCrypto<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!hasTauriRuntime()) {
-    throw new Error("Secure vault operations require the Tauri runtime.");
+    throw new Error(`Tauri runtime unavailable for ${cmd}`);
   }
 
-  try {
-    const invoke = await getInvoke();
-    return await invoke<T>(command, args);
-  } catch (error) {
-    throw new Error(mapCryptoError(error, command));
-  }
+  const invoke = await getInvoke();
+  return invoke<T>(cmd, args);
 }
 
 export async function setupPin(pin: string): Promise<void> {
@@ -62,44 +58,46 @@ export async function verifyPin(pin: string): Promise<boolean> {
   try {
     await invokeCrypto<VaultStatus>("crypto_unlock", { pin });
     return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message === "Incorrect PIN.") {
-      return false;
-    }
-    throw error;
+  } catch {
+    return false;
   }
 }
 
-export async function isPinSetup(): Promise<boolean> {
-  const status = await invokeCrypto<VaultStatus>("crypto_status");
-  return status.has_pin;
-}
-
-export async function lockVault(): Promise<void> {
+export async function lockCrypto(): Promise<void> {
   await invokeCrypto("crypto_lock");
 }
 
-export async function vaultStatus(): Promise<VaultStatus> {
+export async function cryptoStatus(): Promise<VaultStatus> {
   return invokeCrypto<VaultStatus>("crypto_status");
 }
 
-export async function encryptData(data: string, _pin: string): Promise<string> {
-  const encrypted = await invokeCrypto<EncryptedBlob>("crypto_encrypt_note", { content: data });
-  return JSON.stringify(encrypted);
+export async function isPinSetup(): Promise<boolean> {
+  try {
+    const status = await cryptoStatus();
+    return status.has_pin;
+  } catch {
+    return false;
+  }
 }
 
-export async function decryptData(encryptedStr: string, _pin: string): Promise<string> {
+export async function encryptData(data: string, _pin?: string): Promise<string> {
+  const blob = await invokeCrypto<EncryptedBlob>("crypto_encrypt_note", { content: data });
+  return JSON.stringify(blob);
+}
+
+export async function decryptData(encryptedStr: string, _pin?: string): Promise<string> {
   const blob = JSON.parse(encryptedStr) as EncryptedBlob;
   return invokeCrypto<string>("crypto_decrypt_note", { blob });
 }
 
+// Legacy compatibility: note blobs are now managed by Rust capabilities.
 export function getEncryptedNotes(): string | null {
   return null;
 }
 
+// Legacy compatibility: note blobs are now managed by Rust capabilities.
 export function saveEncryptedNotes(_encrypted: string): void {
-  // Intentionally no-op: encrypted payloads are persisted in Rust only.
+  // no-op
 }
 
 const AGENT_NOTES_KEY = "zettel-agent-notes";

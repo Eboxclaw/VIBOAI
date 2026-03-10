@@ -63,7 +63,6 @@ export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProvid
     void loadNotesFromTauri();
   }, [tauriAvailable]);
 
-  // Save agent notes (unencrypted — agents always have access)
   useEffect(() => {
     saveAgentNotes(JSON.stringify(agentNotes));
   }, [agentNotes]);

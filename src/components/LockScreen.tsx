@@ -18,16 +18,12 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    const loadPinStatus = async () => {
-      try {
-        const hasPin = await isPinSetup();
-        setIsSetup(hasPin);
-      } catch (statusError) {
-        setError(statusError instanceof Error ? statusError.message : "Unable to read vault status.");
-      }
+    const loadStatus = async () => {
+      const setup = await isPinSetup();
+      setIsSetup(setup);
     };
 
-    void loadPinStatus();
+    void loadStatus();
   }, []);
 
   useEffect(() => {
@@ -89,12 +85,9 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
       return;
     }
 
-    try {
-      await setupPin(pin);
-      onUnlock(pin);
-    } catch (setupError) {
-      setError(setupError instanceof Error ? setupError.message : "Unable to set PIN.");
-    }
+    await setupPin(pin);
+    setIsSetup(true);
+    onUnlock(pin);
   };
 
   return (
