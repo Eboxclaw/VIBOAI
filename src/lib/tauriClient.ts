@@ -118,6 +118,7 @@ export const tauriClient = {
     });
   },
   async updateNote(note: Note): Promise<void> {
+    const id = fileNameFromNoteId(note.id);
     const id = resolveTauriId(note);
     await invokeCommand("note_patch", { id, body: note.content });
     await invokeCommand("note_set_frontmatter", { id, frontmatter: noteToFrontmatter(note) });

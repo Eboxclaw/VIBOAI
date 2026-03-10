@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { Note, KanbanColumn, DEFAULT_COLUMNS, ViewMode } from "./types";
+import { encryptData, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
 import { encryptData, decryptData, getEncryptedNotes, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
 import { tauriClient } from "./tauriClient";
 
@@ -47,6 +48,7 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
   const [activeView, setActiveView] = useState<ViewMode>("dashboard");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const pinRef = useRef(pin);
+  const tauriAvailable = tauriClient.isAvailable();
 
   useEffect(() => {
     const loadNotesFromTauri = async () => {
@@ -61,6 +63,22 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
 
   // Encrypt and save notes whenever they change
   useEffect(() => {
+    if (!tauriAvailable) return;
+
+    const loadNotesFromTauri = async () => {
+      const tauriNotes = await tauriClient.listNotes();
+      if (tauriNotes) {
+        setNotes(tauriNotes);
+      }
+    };
+
+    void loadNotesFromTauri();
+  }, [tauriAvailable]);
+
+  // Keep browser-local persistence only for non-Tauri runtime.
+  useEffect(() => {
+    if (tauriAvailable) return;
+
     const save = async () => {
       try {
         const encrypted = await encryptData(JSON.stringify(notes), pinRef.current);
@@ -69,8 +87,8 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
         console.error("Failed to encrypt notes:", e);
       }
     };
-    save();
-  }, [notes]);
+    void save();
+  }, [notes, tauriAvailable]);
 
   // Save agent notes (unencrypted — agents always have access)
   useEffect(() => {
