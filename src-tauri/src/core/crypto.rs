@@ -411,12 +411,16 @@ pub fn keystore_delete_internal(
     state: &CryptoState,
     key_name: String,
 ) -> Result<(), String> {
+    let session = state.session_key.lock().unwrap();
+    let _key = session.as_ref().ok_or("Vault is locked")?;
     let db = state.db.lock().unwrap();
     db.execute("DELETE FROM keystore WHERE key_name = ?1", params![key_name])
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
+/// List keystore entries (names + categories only, no secrets).
+/// Vault must be unlocked so key metadata is not exposed while locked.
 /// Delete a keystore entry
 #[tauri::command]
 pub fn crypto_keystore_delete(
@@ -431,6 +435,8 @@ pub fn crypto_keystore_delete(
 pub fn crypto_keystore_list(
     state: tauri::State<CryptoState>,
 ) -> Result<Vec<KeystoreEntry>, String> {
+    let session = state.session_key.lock().unwrap();
+    let _key = session.as_ref().ok_or("Vault is locked")?;
     let db = state.db.lock().unwrap();
     let mut stmt = db.prepare(
         "SELECT key_name, category, created_at, modified_at FROM keystore ORDER BY category, key_name"
