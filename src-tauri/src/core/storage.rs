@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 /// storage.rs — ViBo SQLite Layer
 ///
 /// Single .db file per vault. Source of truth stays in .md files.
@@ -16,13 +17,11 @@
 ///   2. semantic_cache   (~5ms)   cosine sim on cached queries
 ///   3. embeddings       (~20ms)  full semantic search on vault
 ///   → decision: local agent / parallel agents / cloud
-
-use rusqlite::{Connection, Result as SqlResult, params};
+use rusqlite::{params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::State;
-use chrono::{DateTime, Utc};
 
 pub const EMBEDDING_DIM: usize = 384; // all-MiniLM-L6-v2
 
@@ -35,9 +34,9 @@ pub struct NoteIndexRow {
     pub id: String,
     pub title: String,
     pub path: String,
-    pub tags: String,           // JSON array string
+    pub tags: String, // JSON array string
     pub word_count: i64,
-    pub modified_at: String,    // ISO 8601
+    pub modified_at: String, // ISO 8601
     pub has_embedding: bool,
 }
 
@@ -60,11 +59,11 @@ pub struct CacheHit {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RoutingSignal {
     pub id: i64,
-    pub name: String,           // e.g. "calendar_intent"
-    pub pattern: String,        // regex or keyword
-    pub signal_type: String,    // "keyword" | "regex" | "domain"
-    pub target_tool: String,    // e.g. "kanban_create_card"
-    pub priority: i64,          // higher = checked first
+    pub name: String,        // e.g. "calendar_intent"
+    pub pattern: String,     // regex or keyword
+    pub signal_type: String, // "keyword" | "regex" | "domain"
+    pub target_tool: String, // e.g. "kanban_create_card"
+    pub priority: i64,       // higher = checked first
     pub enabled: bool,
 }
 
@@ -79,7 +78,7 @@ pub struct RoutingMatch {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentMemory {
     pub key: String,
-    pub value: String,          // JSON
+    pub value: String, // JSON
     pub session: Option<String>,
     pub expires_at: Option<String>,
     pub created_at: String,
@@ -88,17 +87,18 @@ pub struct AgentMemory {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Distillation {
-    pub id: String,             // UUID
+    pub id: String,                // UUID
     pub distillation_type: String, // "tag_cluster" | "temporal" | "semantic_links" | "summary"
-    pub source_ids: String,     // JSON array of note ids
-    pub content_md: String,     // compact markdown output
-    pub tags: String,           // JSON array
+    pub source_ids: String,        // JSON array of note ids
+    pub content_md: String,        // compact markdown output
+    pub tags: String,              // JSON array
     pub created_at: String,
 }
 
 pub struct StorageState {
     pub db: Mutex<Connection>,
     pub vault_path: PathBuf,
+    pub vector_enabled: bool,
 }
 
 // ─────────────────────────────────────────
@@ -106,35 +106,103 @@ pub struct StorageState {
 // ─────────────────────────────────────────
 
 impl StorageState {
-    pub fn new(vault_path: &Path) -> SqlResult<Self> {
+    pub fn new(vault_path: &Path, resource_dir: Option<&Path>) -> SqlResult<Self> {
         let db_path = vault_path.join(".vibo").join("storage.db");
         std::fs::create_dir_all(db_path.parent().unwrap())
             .map_err(|e| rusqlite::Error::InvalidPath(e.to_string().into()))?;
 
         let conn = Connection::open(&db_path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+        )?;
 
-        // Load sqlite-vec extension
-        unsafe {
-            conn.load_extension_enable()?;
-            conn.load_extension(Path::new("sqlite-vec"), None)?;
-            conn.load_extension_disable()?;
+        let vector_enabled = Self::try_load_vector_extension(&conn, resource_dir);
+        if vector_enabled {
+            println!("[storage] sqlite-vec extension loaded; vector search enabled");
+        } else {
+            eprintln!(
+                "[storage] sqlite-vec extension unavailable; vector search degraded/disabled"
+            );
         }
 
         let state = StorageState {
             db: Mutex::new(conn),
             vault_path: vault_path.to_path_buf(),
+            vector_enabled,
         };
         state.migrate()?;
         state.seed_routing_signals()?;
         Ok(state)
     }
 
+    fn vector_extension_candidates(resource_dir: Option<&Path>) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        let ext = if cfg!(target_os = "windows") {
+            "dll"
+        } else if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
+
+        candidates.push(PathBuf::from(format!("src-tauri/libs/vec0.{ext}")));
+        candidates.push(PathBuf::from(format!("src-tauri/libs/sqlite-vec.{ext}")));
+        candidates.push(PathBuf::from(format!("src-tauri/libs/vec0")));
+        candidates.push(PathBuf::from(format!("src-tauri/libs/sqlite-vec")));
+
+        if let Some(resource_dir) = resource_dir {
+            candidates.push(resource_dir.join(format!("vec0.{ext}")));
+            candidates.push(resource_dir.join(format!("sqlite-vec.{ext}")));
+            candidates.push(resource_dir.join("libs").join(format!("vec0.{ext}")));
+            candidates.push(resource_dir.join("libs").join(format!("sqlite-vec.{ext}")));
+        }
+
+        candidates
+    }
+
+    fn try_load_vector_extension(conn: &Connection, resource_dir: Option<&Path>) -> bool {
+        unsafe {
+            if conn.load_extension_enable().is_err() {
+                return false;
+            }
+        }
+
+        let mut loaded = false;
+        for candidate in Self::vector_extension_candidates(resource_dir)
+            .into_iter()
+            .filter(|p| p.exists())
+        {
+            let result = unsafe { conn.load_extension(candidate.as_path(), None) };
+            if result.is_ok() {
+                loaded = true;
+                break;
+            }
+        }
+
+        if !loaded {
+            loaded = unsafe { conn.load_extension(Path::new("sqlite-vec"), None) }.is_ok();
+        }
+
+        let _ = unsafe { conn.load_extension_disable() };
+        loaded
+    }
+
+    fn ensure_vector_enabled(&self, feature: &str) -> Result<(), String> {
+        if self.vector_enabled {
+            Ok(())
+        } else {
+            Err(format!(
+                "{feature} is unavailable: sqlite-vec extension is not loaded (degraded mode enabled)"
+            ))
+        }
+    }
+
     fn migrate(&self) -> SqlResult<()> {
         let db = self.db.lock().unwrap();
 
         // notes_index
-        db.execute_batch("
+        db.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS notes_index (
                 id          TEXT PRIMARY KEY,
                 title       TEXT NOT NULL,
@@ -146,20 +214,27 @@ impl StorageState {
             );
             CREATE INDEX IF NOT EXISTS idx_notes_modified ON notes_index(modified_at DESC);
             CREATE INDEX IF NOT EXISTS idx_notes_tags ON notes_index(tags);
-        ")?;
+        ",
+        )?;
 
-        // embeddings via sqlite-vec virtual table
-        db.execute_batch(&format!("
-            CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0(
-                note_id     TEXT,
-                chunk_index INTEGER,
-                chunk_text  TEXT,
-                embedding   float[{}]
-            );
-        ", EMBEDDING_DIM))?;
+        if self.vector_enabled {
+            // embeddings via sqlite-vec virtual table
+            db.execute_batch(&format!(
+                "
+                CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0(
+                    note_id     TEXT,
+                    chunk_index INTEGER,
+                    chunk_text  TEXT,
+                    embedding   float[{}]
+                );
+            ",
+                EMBEDDING_DIM
+            ))?;
+        }
 
         // semantic_cache
-        db.execute_batch(&format!("
+        db.execute_batch(&format!(
+            "
             CREATE TABLE IF NOT EXISTS semantic_cache (
                 id          TEXT PRIMARY KEY,
                 query_text  TEXT NOT NULL,
@@ -168,14 +243,24 @@ impl StorageState {
                 created_at  TEXT NOT NULL,
                 last_hit_at TEXT NOT NULL
             );
-            CREATE VIRTUAL TABLE IF NOT EXISTS cache_vectors USING vec0(
-                cache_id    TEXT,
-                embedding   float[{}]
-            );
-        ", EMBEDDING_DIM))?;
+        "
+        ))?;
+
+        if self.vector_enabled {
+            db.execute_batch(&format!(
+                "
+                CREATE VIRTUAL TABLE IF NOT EXISTS cache_vectors USING vec0(
+                    cache_id    TEXT,
+                    embedding   float[{}]
+                );
+            ",
+                EMBEDDING_DIM
+            ))?;
+        }
 
         // routing_signals
-        db.execute_batch("
+        db.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS routing_signals (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 name        TEXT NOT NULL UNIQUE,
@@ -185,10 +270,12 @@ impl StorageState {
                 priority    INTEGER NOT NULL DEFAULT 0,
                 enabled     INTEGER NOT NULL DEFAULT 1
             );
-        ")?;
+        ",
+        )?;
 
         // agent_memory
-        db.execute_batch(&format!("
+        db.execute_batch(&format!(
+            "
             CREATE TABLE IF NOT EXISTS agent_memory (
                 key         TEXT NOT NULL,
                 session     TEXT,
@@ -198,14 +285,24 @@ impl StorageState {
                 modified_at TEXT NOT NULL,
                 PRIMARY KEY (key, session)
             );
-            CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors USING vec0(
-                memory_key  TEXT,
-                embedding   float[{}]
-            );
-        ", EMBEDDING_DIM))?;
+        "
+        ))?;
+
+        if self.vector_enabled {
+            db.execute_batch(&format!(
+                "
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors USING vec0(
+                    memory_key  TEXT,
+                    embedding   float[{}]
+                );
+            ",
+                EMBEDDING_DIM
+            ))?;
+        }
 
         // distillations
-        db.execute_batch("
+        db.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS distillations (
                 id                  TEXT PRIMARY KEY,
                 distillation_type   TEXT NOT NULL,
@@ -216,7 +313,8 @@ impl StorageState {
             );
             CREATE INDEX IF NOT EXISTS idx_distill_type ON distillations(distillation_type);
             CREATE INDEX IF NOT EXISTS idx_distill_tags ON distillations(tags);
-        ")?;
+        ",
+        )?;
 
         Ok(())
     }
@@ -226,15 +324,69 @@ impl StorageState {
         let db = self.db.lock().unwrap();
         let signals: Vec<(&str, &str, &str, &str, i64)> = vec![
             // (name, pattern, type, target_tool, priority)
-            ("create_note_intent",    r"(cria|escreve|nova nota|new note|add note)", "regex",   "note_create",              10),
-            ("search_note_intent",    r"(encontra|search|procura|find|busca)",       "regex",   "note_search",              10),
-            ("kanban_move_intent",    r"(move|muda|transfere|coloca em)",            "regex",   "kanban_move_card",         10),
-            ("kanban_create_intent",  r"(task|tarefa|card|criar card|new task)",     "regex",   "kanban_create_card",       10),
-            ("calendar_read_intent",  r"(calendário|calendar|evento|event|agenda)",  "regex",   "google_calendar_read",     9),
-            ("calendar_write_intent", r"(marca|agendar|schedule|criar evento)",      "regex",   "google_calendar_write",    9),
-            ("daily_note_intent",     r"(hoje|today|nota diária|daily note)",        "regex",   "note_daily_get",           8),
-            ("encrypt_intent",        r"(encripta|encryp|lock|bloqueia|segredo)",    "regex",   "vault_encrypt",            10),
-            ("overdue_intent",        r"(atrasado|overdue|em atraso|deadline)",      "keyword", "kanban_get_overdue",       7),
+            (
+                "create_note_intent",
+                r"(cria|escreve|nova nota|new note|add note)",
+                "regex",
+                "note_create",
+                10,
+            ),
+            (
+                "search_note_intent",
+                r"(encontra|search|procura|find|busca)",
+                "regex",
+                "note_search",
+                10,
+            ),
+            (
+                "kanban_move_intent",
+                r"(move|muda|transfere|coloca em)",
+                "regex",
+                "kanban_move_card",
+                10,
+            ),
+            (
+                "kanban_create_intent",
+                r"(task|tarefa|card|criar card|new task)",
+                "regex",
+                "kanban_create_card",
+                10,
+            ),
+            (
+                "calendar_read_intent",
+                r"(calendário|calendar|evento|event|agenda)",
+                "regex",
+                "google_calendar_read",
+                9,
+            ),
+            (
+                "calendar_write_intent",
+                r"(marca|agendar|schedule|criar evento)",
+                "regex",
+                "google_calendar_write",
+                9,
+            ),
+            (
+                "daily_note_intent",
+                r"(hoje|today|nota diária|daily note)",
+                "regex",
+                "note_daily_get",
+                8,
+            ),
+            (
+                "encrypt_intent",
+                r"(encripta|encryp|lock|bloqueia|segredo)",
+                "regex",
+                "vault_encrypt",
+                10,
+            ),
+            (
+                "overdue_intent",
+                r"(atrasado|overdue|em atraso|deadline)",
+                "keyword",
+                "kanban_get_overdue",
+                7,
+            ),
         ];
 
         for (name, pattern, sig_type, tool, priority) in signals {
@@ -289,17 +441,19 @@ pub fn storage_list_notes(state: State<StorageState>) -> Result<Vec<NoteIndexRow
     let mut stmt = db.prepare(
         "SELECT id, title, path, tags, word_count, modified_at, has_embedding FROM notes_index ORDER BY modified_at DESC"
     ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| {
-        Ok(NoteIndexRow {
-            id: row.get(0)?,
-            title: row.get(1)?,
-            path: row.get(2)?,
-            tags: row.get(3)?,
-            word_count: row.get(4)?,
-            modified_at: row.get(5)?,
-            has_embedding: row.get::<_, i32>(6)? == 1,
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(NoteIndexRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                path: row.get(2)?,
+                tags: row.get(3)?,
+                word_count: row.get(4)?,
+                modified_at: row.get(5)?,
+                has_embedding: row.get::<_, i32>(6)? == 1,
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     rows.map(|r| r.map_err(|e| e.to_string())).collect()
 }
 
@@ -310,17 +464,19 @@ pub fn storage_get_unembedded(state: State<StorageState>) -> Result<Vec<NoteInde
     let mut stmt = db.prepare(
         "SELECT id, title, path, tags, word_count, modified_at, has_embedding FROM notes_index WHERE has_embedding = 0"
     ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| {
-        Ok(NoteIndexRow {
-            id: row.get(0)?,
-            title: row.get(1)?,
-            path: row.get(2)?,
-            tags: row.get(3)?,
-            word_count: row.get(4)?,
-            modified_at: row.get(5)?,
-            has_embedding: false,
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(NoteIndexRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                path: row.get(2)?,
+                tags: row.get(3)?,
+                word_count: row.get(4)?,
+                modified_at: row.get(5)?,
+                has_embedding: false,
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     rows.map(|r| r.map_err(|e| e.to_string())).collect()
 }
 
@@ -335,10 +491,15 @@ pub fn storage_store_embedding(
     note_id: String,
     chunk_index: usize,
     chunk_text: String,
-    embedding: Vec<f32>,        // 384 floats from all-MiniLM-L6-v2
+    embedding: Vec<f32>, // 384 floats from all-MiniLM-L6-v2
 ) -> Result<(), String> {
+    state.ensure_vector_enabled("Embedding storage")?;
     if embedding.len() != EMBEDDING_DIM {
-        return Err(format!("Expected {} dimensions, got {}", EMBEDDING_DIM, embedding.len()));
+        return Err(format!(
+            "Expected {} dimensions, got {}",
+            EMBEDDING_DIM,
+            embedding.len()
+        ));
     }
     let db = state.db.lock().unwrap();
     let blob = floats_to_blob(&embedding);
@@ -350,7 +511,8 @@ pub fn storage_store_embedding(
     db.execute(
         "UPDATE notes_index SET has_embedding = 1 WHERE id = ?1",
         params![note_id],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -358,31 +520,42 @@ pub fn storage_store_embedding(
 #[tauri::command]
 pub fn storage_semantic_search(
     state: State<StorageState>,
-    query_embedding: Vec<f32>,  // 384 floats
+    query_embedding: Vec<f32>, // 384 floats
     top_k: Option<usize>,
 ) -> Result<Vec<SemanticSearchResult>, String> {
+    state.ensure_vector_enabled("Semantic search")?;
     if query_embedding.len() != EMBEDDING_DIM {
-        return Err(format!("Expected {} dimensions, got {}", EMBEDDING_DIM, query_embedding.len()));
+        return Err(format!(
+            "Expected {} dimensions, got {}",
+            EMBEDDING_DIM,
+            query_embedding.len()
+        ));
     }
     let k = top_k.unwrap_or(10);
     let db = state.db.lock().unwrap();
     let blob = floats_to_blob(&query_embedding);
-    let mut stmt = db.prepare("
+    let mut stmt = db
+        .prepare(
+            "
         SELECT e.note_id, n.title, e.chunk_text, e.distance
         FROM embeddings e
         JOIN notes_index n ON e.note_id = n.id
         WHERE embedding MATCH ?1 AND k = ?2
         ORDER BY e.distance ASC
-    ").map_err(|e| e.to_string())?;
+    ",
+        )
+        .map_err(|e| e.to_string())?;
 
-    let rows = stmt.query_map(params![blob, k as i64], |row| {
-        Ok(SemanticSearchResult {
-            note_id: row.get(0)?,
-            title: row.get(1)?,
-            chunk_text: row.get(2)?,
-            score: 1.0 - row.get::<_, f32>(3)?, // convert distance to score
+    let rows = stmt
+        .query_map(params![blob, k as i64], |row| {
+            Ok(SemanticSearchResult {
+                note_id: row.get(0)?,
+                title: row.get(1)?,
+                chunk_text: row.get(2)?,
+                score: 1.0 - row.get::<_, f32>(3)?, // convert distance to score
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     rows.map(|r| r.map_err(|e| e.to_string())).collect()
 }
 
@@ -392,11 +565,18 @@ pub fn storage_delete_embeddings(
     state: State<StorageState>,
     note_id: String,
 ) -> Result<(), String> {
+    state.ensure_vector_enabled("Embedding deletion")?;
     let db = state.db.lock().unwrap();
-    db.execute("DELETE FROM embeddings WHERE note_id = ?1", params![note_id])
-        .map_err(|e| e.to_string())?;
-    db.execute("UPDATE notes_index SET has_embedding = 0 WHERE id = ?1", params![note_id])
-        .map_err(|e| e.to_string())?;
+    db.execute(
+        "DELETE FROM embeddings WHERE note_id = ?1",
+        params![note_id],
+    )
+    .map_err(|e| e.to_string())?;
+    db.execute(
+        "UPDATE notes_index SET has_embedding = 0 WHERE id = ?1",
+        params![note_id],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -409,28 +589,33 @@ pub fn storage_delete_embeddings(
 pub fn storage_cache_lookup(
     state: State<StorageState>,
     query_embedding: Vec<f32>,
-    threshold: Option<f32>,     // default 0.92 — high similarity required
+    threshold: Option<f32>, // default 0.92 — high similarity required
 ) -> Result<Option<CacheHit>, String> {
+    state.ensure_vector_enabled("Semantic cache lookup")?;
     let min_score = threshold.unwrap_or(0.92);
     let db = state.db.lock().unwrap();
     let blob = floats_to_blob(&query_embedding);
 
-    let result = db.query_row("
+    let result = db.query_row(
+        "
         SELECT cv.cache_id, sc.query_text, sc.result_json, sc.hit_count, cv.distance
         FROM cache_vectors cv
         JOIN semantic_cache sc ON cv.cache_id = sc.id
         WHERE cv.embedding MATCH ?1 AND k = 1
         ORDER BY cv.distance ASC
         LIMIT 1
-    ", params![blob], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, f32>(4)?,
-        ))
-    });
+    ",
+        params![blob],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, f32>(4)?,
+            ))
+        },
+    );
 
     match result {
         Ok((cache_id, query_text, result_json, hit_count, distance)) => {
@@ -442,7 +627,12 @@ pub fn storage_cache_lookup(
                     "UPDATE semantic_cache SET hit_count = hit_count + 1, last_hit_at = ?1 WHERE id = ?2",
                     params![now, cache_id],
                 );
-                Ok(Some(CacheHit { query: query_text, result_json, score, hit_count: hit_count + 1 }))
+                Ok(Some(CacheHit {
+                    query: query_text,
+                    result_json,
+                    score,
+                    hit_count: hit_count + 1,
+                }))
             } else {
                 Ok(None)
             }
@@ -459,6 +649,7 @@ pub fn storage_cache_store(
     query_embedding: Vec<f32>,
     result_json: String,
 ) -> Result<(), String> {
+    state.ensure_vector_enabled("Semantic cache store")?;
     let db = state.db.lock().unwrap();
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -472,7 +663,8 @@ pub fn storage_cache_store(
     db.execute(
         "INSERT INTO cache_vectors (cache_id, embedding) VALUES (?1, ?2)",
         params![id, blob],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -480,9 +672,13 @@ pub fn storage_cache_store(
 /// Clear stale cache entries (call periodically or when vault changes significantly)
 #[tauri::command]
 pub fn storage_cache_clear(state: State<StorageState>) -> Result<usize, String> {
+    state.ensure_vector_enabled("Semantic cache clear")?;
     let db = state.db.lock().unwrap();
-    let deleted = db.execute("DELETE FROM semantic_cache", []).map_err(|e| e.to_string())?;
-    db.execute("DELETE FROM cache_vectors", []).map_err(|e| e.to_string())?;
+    let deleted = db
+        .execute("DELETE FROM semantic_cache", [])
+        .map_err(|e| e.to_string())?;
+    db.execute("DELETE FROM cache_vectors", [])
+        .map_err(|e| e.to_string())?;
     Ok(deleted)
 }
 
@@ -502,19 +698,21 @@ pub fn storage_route_query(
         "SELECT name, pattern, signal_type, target_tool, priority FROM routing_signals WHERE enabled = 1 ORDER BY priority DESC"
     ).map_err(|e| e.to_string())?;
 
-    let signals: Vec<RoutingSignal> = stmt.query_map([], |row| {
-        Ok(RoutingSignal {
-            id: 0,
-            name: row.get(0)?,
-            pattern: row.get(1)?,
-            signal_type: row.get(2)?,
-            target_tool: row.get(3)?,
-            priority: row.get(4)?,
-            enabled: true,
+    let signals: Vec<RoutingSignal> = stmt
+        .query_map([], |row| {
+            Ok(RoutingSignal {
+                id: 0,
+                name: row.get(0)?,
+                pattern: row.get(1)?,
+                signal_type: row.get(2)?,
+                target_tool: row.get(3)?,
+                priority: row.get(4)?,
+                enabled: true,
+            })
         })
-    }).map_err(|e| e.to_string())?
-    .filter_map(|r| r.ok())
-    .collect();
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
 
     let query_lower = query.to_lowercase();
     let mut matches = vec![];
@@ -522,11 +720,9 @@ pub fn storage_route_query(
     for signal in signals {
         let matched = match signal.signal_type.as_str() {
             "keyword" => query_lower.contains(&signal.pattern.to_lowercase()),
-            "regex" => {
-                regex::Regex::new(&signal.pattern)
-                    .map(|re| re.is_match(&query_lower))
-                    .unwrap_or(false)
-            }
+            "regex" => regex::Regex::new(&signal.pattern)
+                .map(|re| re.is_match(&query_lower))
+                .unwrap_or(false),
             _ => false,
         };
         if matched {
@@ -561,22 +757,26 @@ pub fn storage_add_routing_signal(
 
 /// List all routing signals
 #[tauri::command]
-pub fn storage_list_routing_signals(state: State<StorageState>) -> Result<Vec<RoutingSignal>, String> {
+pub fn storage_list_routing_signals(
+    state: State<StorageState>,
+) -> Result<Vec<RoutingSignal>, String> {
     let db = state.db.lock().unwrap();
     let mut stmt = db.prepare(
         "SELECT id, name, pattern, signal_type, target_tool, priority, enabled FROM routing_signals ORDER BY priority DESC"
     ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| {
-        Ok(RoutingSignal {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            pattern: row.get(2)?,
-            signal_type: row.get(3)?,
-            target_tool: row.get(4)?,
-            priority: row.get(5)?,
-            enabled: row.get::<_, i32>(6)? == 1,
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(RoutingSignal {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                pattern: row.get(2)?,
+                signal_type: row.get(3)?,
+                target_tool: row.get(4)?,
+                priority: row.get(5)?,
+                enabled: row.get::<_, i32>(6)? == 1,
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     rows.map(|r| r.map_err(|e| e.to_string())).collect()
 }
 
@@ -618,14 +818,16 @@ pub fn storage_memory_get(
         "SELECT key, value, session, expires_at, created_at, modified_at FROM agent_memory
          WHERE key = ?1 AND session = ?2 AND (expires_at IS NULL OR expires_at > ?3)",
         params![key, sess, now],
-        |row| Ok(AgentMemory {
-            key: row.get(0)?,
-            value: row.get(1)?,
-            session: row.get(2)?,
-            expires_at: row.get(3)?,
-            created_at: row.get(4)?,
-            modified_at: row.get(5)?,
-        }),
+        |row| {
+            Ok(AgentMemory {
+                key: row.get(0)?,
+                value: row.get(1)?,
+                session: row.get(2)?,
+                expires_at: row.get(3)?,
+                created_at: row.get(4)?,
+                modified_at: row.get(5)?,
+            })
+        },
     );
     match result {
         Ok(mem) => Ok(Some(mem)),
@@ -642,21 +844,25 @@ pub fn storage_memory_get_session(
 ) -> Result<Vec<AgentMemory>, String> {
     let db = state.db.lock().unwrap();
     let now = Utc::now().to_rfc3339();
-    let mut stmt = db.prepare(
-        "SELECT key, value, session, expires_at, created_at, modified_at FROM agent_memory
+    let mut stmt = db
+        .prepare(
+            "SELECT key, value, session, expires_at, created_at, modified_at FROM agent_memory
          WHERE session = ?1 AND (expires_at IS NULL OR expires_at > ?2)
-         ORDER BY modified_at DESC"
-    ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![session, now], |row| {
-        Ok(AgentMemory {
-            key: row.get(0)?,
-            value: row.get(1)?,
-            session: row.get(2)?,
-            expires_at: row.get(3)?,
-            created_at: row.get(4)?,
-            modified_at: row.get(5)?,
+         ORDER BY modified_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![session, now], |row| {
+            Ok(AgentMemory {
+                key: row.get(0)?,
+                value: row.get(1)?,
+                session: row.get(2)?,
+                expires_at: row.get(3)?,
+                created_at: row.get(4)?,
+                modified_at: row.get(5)?,
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     rows.map(|r| r.map_err(|e| e.to_string())).collect()
 }
 
@@ -669,8 +875,11 @@ pub fn storage_memory_delete(
 ) -> Result<(), String> {
     let db = state.db.lock().unwrap();
     let sess = session.unwrap_or_default();
-    db.execute("DELETE FROM agent_memory WHERE key = ?1 AND session = ?2", params![key, sess])
-        .map_err(|e| e.to_string())?;
+    db.execute(
+        "DELETE FROM agent_memory WHERE key = ?1 AND session = ?2",
+        params![key, sess],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -730,7 +939,8 @@ pub fn storage_get_distillations(
                 tags: row.get(4)?,
                 created_at: row.get(5)?,
             })
-        }).map_err(|e| e.to_string())?
+        })
+        .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect()
     } else {
@@ -746,7 +956,8 @@ pub fn storage_get_distillations(
                 tags: row.get(4)?,
                 created_at: row.get(5)?,
             })
-        }).map_err(|e| e.to_string())?
+        })
+        .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect()
     };
@@ -759,6 +970,93 @@ pub fn storage_get_distillations(
 
 fn floats_to_blob(floats: &[f32]) -> Vec<u8> {
     floats.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_vault_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("vibo-storage-test-{name}-{nanos}"))
+    }
+
+    fn platform_extension_suffix() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "dll"
+        } else if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        }
+    }
+
+    #[test]
+    fn storage_init_is_non_fatal_when_vector_extension_is_missing() {
+        let vault_path = make_temp_vault_path("degraded-init");
+        std::fs::create_dir_all(&vault_path).unwrap();
+
+        StorageState::new(
+            &vault_path,
+            Some(Path::new("/definitely/missing/resource/dir")),
+        )
+        .expect("storage init should succeed even when vector extension is unavailable");
+
+        let _ = std::fs::remove_dir_all(&vault_path);
+    }
+
+    #[test]
+    fn storage_init_is_non_fatal_with_explicit_but_invalid_packaged_extension_path() {
+        let vault_path = make_temp_vault_path("invalid-packaged-path");
+        let resource_dir = make_temp_vault_path("resources");
+        std::fs::create_dir_all(resource_dir.join("libs")).unwrap();
+        std::fs::write(
+            resource_dir
+                .join("libs")
+                .join(format!("vec0.{}", platform_extension_suffix())),
+            b"not a real extension",
+        )
+        .unwrap();
+
+        StorageState::new(&vault_path, Some(&resource_dir)).expect(
+            "storage init should not fail even when explicit packaged extension file is invalid",
+        );
+
+        let _ = std::fs::remove_dir_all(&vault_path);
+        let _ = std::fs::remove_dir_all(&resource_dir);
+    }
+
+    #[test]
+    fn vector_guard_reports_clear_error_in_degraded_mode() {
+        let state = StorageState {
+            db: Mutex::new(Connection::open_in_memory().unwrap()),
+            vault_path: PathBuf::new(),
+            vector_enabled: false,
+        };
+
+        let err = state
+            .ensure_vector_enabled("Semantic search")
+            .expect_err("vector guard should reject semantic features when disabled");
+        assert!(err.contains("Semantic search is unavailable"));
+        assert!(err.contains("degraded mode"));
+    }
+
+    #[test]
+    fn vector_guard_allows_semantic_features_when_enabled() {
+        let state = StorageState {
+            db: Mutex::new(Connection::open_in_memory().unwrap()),
+            vault_path: PathBuf::new(),
+            vector_enabled: true,
+        };
+
+        state
+            .ensure_vector_enabled("Semantic search")
+            .expect("vector guard should allow semantic features when enabled");
+    }
 }
 
 // ─────────────────────────────────────────
