@@ -54,7 +54,7 @@ const SidebarProvider = React.forwardRef<
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
   const [_open, _setOpen] = React.useState(defaultOpen);
-  const open = openProp ?? _open;
+  const open = openProp !== null && openProp !== undefined ? openProp : _open;
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value;
@@ -228,7 +228,7 @@ const SidebarTrigger = React.forwardRef<React.ElementRef<typeof Button>, React.C
         size="icon"
         className={cn("h-7 w-7", className)}
         onClick={(event) => {
-          onClick?.(event);
+          if (onClick) onClick(event);
           toggleSidebar();
         }}
         {...props}

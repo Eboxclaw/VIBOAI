@@ -72,20 +72,29 @@ function stripFrontmatter(content: string): string {
 }
 
 function tauriNoteToUiNote(note: TauriNote): Note {
-  const custom = note.frontmatter?.custom ?? {};
+  const frontmatter = note.frontmatter;
+  const custom = frontmatter && frontmatter.custom ? frontmatter.custom : {};
   const positionValue = Number(custom.position);
   const hasNumericPosition = Number.isFinite(positionValue);
+  const createdAt =
+    frontmatter && frontmatter.created !== undefined && frontmatter.created !== null
+      ? frontmatter.created
+      : note.created_at;
+  const updatedAt =
+    frontmatter && frontmatter.modified !== undefined && frontmatter.modified !== null
+      ? frontmatter.modified
+      : note.modified_at;
 
   return {
     id: typeof custom.viboNoteId === "string" ? custom.viboNoteId : note.id,
     title: note.title || "Untitled",
     content: stripFrontmatter(note.content),
-    tags: note.tags ?? [],
+    tags: note.tags !== undefined && note.tags !== null ? note.tags : [],
     column: typeof custom.column === "string" ? custom.column : "inbox",
     position: hasNumericPosition ? positionValue : Date.now(),
     isKanban: Boolean(custom.isKanban),
-    createdAt: note.frontmatter?.created ?? note.created_at,
-    updatedAt: note.frontmatter?.modified ?? note.modified_at,
+    createdAt,
+    updatedAt,
   };
 }
 
