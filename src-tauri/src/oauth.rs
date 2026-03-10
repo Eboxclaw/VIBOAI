@@ -76,6 +76,21 @@ impl OAuthState {
             pending: Mutex::new(HashMap::new()),
         }
     }
+
+    /// Register or replace a provider configuration in memory.
+    pub fn register_provider(&self, config: OAuthProviderConfig) {
+        self.providers
+            .lock()
+            .unwrap()
+            .insert(config.name.clone(), config);
+    }
+
+    /// Build OAuth state with Google pre-registered.
+    pub fn with_default_google() -> Self {
+        let state = Self::new();
+        state.register_provider(google_provider_config());
+        state
+    }
 }
 
 // ─────────────────────────────────────────
@@ -146,8 +161,7 @@ pub fn oauth_register_provider(
     state: State<OAuthState>,
     config: OAuthProviderConfig,
 ) -> Result<(), String> {
-    state.providers.lock().unwrap()
-        .insert(config.name.clone(), config);
+    state.register_provider(config);
     Ok(())
 }
 

@@ -153,9 +153,7 @@ fn main() {
             app.manage(training::TrainingState::new(&vault_path));
 
             // oauth.rs — generic OAuth, pre-register Google
-            let oauth_state = oauth::OAuthState::new();
-            oauth_state.providers.lock().unwrap()
-                .insert("google".to_string(), oauth::google_provider_config());
+            let oauth_state = oauth::OAuthState::with_default_google();
             app.manage(oauth_state);
 
             // Deep link handler — Google OAuth callback
