@@ -3,11 +3,11 @@
  * Routes to local LFM (LEAP) or cloud providers based on active config.
  */
 
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   getActiveProvider,
   getActiveLocalModel,
-  getLfmEndpoint,
-  getCloudKeys,
   CLOUD_PROVIDERS,
   getDownloadedModels,
   type ActiveProvider,
@@ -18,18 +18,65 @@ export interface LfmMessage {
   content: string;
 }
 
+interface LlmDeltaEvent {
+  request_id: string;
+  delta: string;
+}
+
+interface LlmDoneEvent {
+  request_id: string;
+}
+
+interface LlmErrorEvent {
+  request_id: string;
+  error: string;
+}
+
 const SYSTEM_PROMPT: LfmMessage = {
   role: "system",
   content: `You are ViBo Assistant, a private AI running locally via LFM. You help users organize notes, create tasks, and think through ideas. You are concise, helpful, and respect user privacy — all data stays on-device. If the user says "new note: <title>" or "new task: <title>", acknowledge it and confirm creation.`,
 };
 
+const DEFAULT_MODELS: Record<ActiveProvider, string> = {
+  local: "lfm2.5-1.2b-instruct",
+  ollama: "llama3",
+  anthropic: "claude-sonnet-4-20250514",
+  openrouter: "meta-llama/llama-3.1-8b-instruct",
+  kimi: "moonshot-v1-8k",
+  minimax: "abab6.5s-chat",
+};
+
+const API_KEY_NAMES: Partial<Record<ActiveProvider, string>> = {
+  anthropic: "anthropic_api_key",
+  openrouter: "openrouter_api_key",
+  kimi: "kimi_api_key",
+  minimax: "minimax_api_key",
+};
+
+function toProviderKind(provider: ActiveProvider): "leap" | "ollama" | "anthropic" | "open_router" | "kimi" | "minimax" {
+  switch (provider) {
+    case "local":
+      return "leap";
+    case "openrouter":
+      return "open_router";
+    default:
+      return provider;
+  }
+}
+
+function getModelForProvider(provider: ActiveProvider): string {
+  if (provider === "local") {
+    return getActiveLocalModel();
+  }
+  return DEFAULT_MODELS[provider];
+}
+
 export function isLfmConfigured(): boolean {
   const provider = getActiveProvider();
   if (provider === "local") {
-    return !!getLfmEndpoint() && getDownloadedModels().length > 0;
+    return getDownloadedModels().length > 0;
   }
-  const keys = getCloudKeys();
-  return !!(keys[provider]);
+  return true;
 }
 
 export function getActiveProviderLabel(): string {
@@ -37,48 +84,6 @@ export function getActiveProviderLabel(): string {
   if (provider === "local") return "LFM Local";
   const found = CLOUD_PROVIDERS.find(p => p.id === provider);
   return found?.name || provider;
-}
-
-function getEndpointAndHeaders(provider: ActiveProvider): { url: string; headers: Record<string, string>; model?: string } {
-  if (provider === "local") {
-    const endpoint = getLfmEndpoint();
-    return {
-      url: `${endpoint.replace(/\/+$/, "")}/v1/chat/completions`,
-      headers: { "Content-Type": "application/json" },
-      model: getActiveLocalModel(),
-    };
-  }
-
-  const keys = getCloudKeys();
-  const providerConfig = CLOUD_PROVIDERS.find(p => p.id === provider);
-
-  if (provider === "ollama") {
-    const host = keys.ollama || "http://localhost:11434";
-    return {
-      url: `${host.replace(/\/+$/, "")}/v1/chat/completions`,
-      headers: { "Content-Type": "application/json" },
-    };
-  }
-
-  if (provider === "anthropic") {
-    return {
-      url: `${providerConfig?.baseUrl}/messages`,
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": keys.anthropic || "",
-        "anthropic-version": "2023-06-01",
-      },
-    };
-  }
-
-  // OpenRouter, Kimi, MiniMax — all OpenAI-compatible
-  return {
-    url: `${providerConfig?.baseUrl}/chat/completions`,
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${keys[provider] || ""}`,
-    },
-  };
 }
 
 /**
@@ -97,91 +102,88 @@ export async function streamLfmChat({
   onError: (err: string) => void;
   signal?: AbortSignal;
 }) {
-  const provider = getActiveProvider();
-
-  if (provider === "local" && !getLfmEndpoint()) {
-    onError("LEAP server not configured. Go to Settings → Local Models to set the endpoint.");
+  if (signal?.aborted) {
+    onDone();
     return;
   }
 
-  const { url, headers, model } = getEndpointAndHeaders(provider);
+  const provider = getActiveProvider();
+  const model = getModelForProvider(provider);
+  const apiKeyName = API_KEY_NAMES[provider];
+
+  const unlisteners: Array<() => void> = [];
+  let requestId = "";
+  let settled = false;
+
+  const cleanup = () => {
+    while (unlisteners.length > 0) {
+      const unlisten = unlisteners.pop();
+      unlisten?.();
+    }
+    if (signal && abortHandler) {
+      signal.removeEventListener("abort", abortHandler);
+    }
+  };
+
+  const settleDone = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    onDone();
+  };
+
+  const settleError = (error: string) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    onError(error);
+  };
+
+  const abortHandler = () => settleDone();
+  if (signal) {
+    signal.addEventListener("abort", abortHandler);
+  }
 
   try {
-    const body: any = {
-      messages: [SYSTEM_PROMPT, ...messages],
-      stream: true,
-      max_tokens: 1024,
-    };
+    unlisteners.push(
+      await listen<LlmDeltaEvent>("llm-delta", (event) => {
+        if (event.payload.request_id !== requestId || settled) return;
+        if (event.payload.delta) {
+          onDelta(event.payload.delta);
+        }
+      }),
+    );
 
-    if (model) body.model = model;
+    unlisteners.push(
+      await listen<LlmDoneEvent>("llm-done", (event) => {
+        if (event.payload.request_id !== requestId || settled) return;
+        settleDone();
+      }),
+    );
 
-    // Anthropic uses a different body format
-    if (provider === "anthropic") {
-      body.model = "claude-sonnet-4-20250514";
-      body.system = SYSTEM_PROMPT.content;
-      body.messages = messages.map(m => ({ role: m.role, content: m.content }));
-    }
+    unlisteners.push(
+      await listen<LlmErrorEvent>("llm-error", (event) => {
+        if (event.payload.request_id !== requestId || settled) return;
+        settleError(event.payload.error || `${getActiveProviderLabel()} error`);
+      }),
+    );
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal,
+    requestId = await invoke<string>("providers_stream", {
+      request: {
+        provider: toProviderKind(provider),
+        model,
+        messages,
+        system: SYSTEM_PROMPT.content,
+        max_tokens: 1024,
+        temperature: 0.7,
+        api_key_name: apiKeyName,
+      },
     });
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      onError(`${getActiveProviderLabel()} error (${resp.status}): ${text || "Connection failed"}`);
-      return;
+    if (signal?.aborted) {
+      settleDone();
     }
-
-    if (!resp.body) {
-      onError("No response body");
-      return;
-    }
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let newlineIdx: number;
-      while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
-        let line = buffer.slice(0, newlineIdx);
-        buffer = buffer.slice(newlineIdx + 1);
-
-        if (line.endsWith("\r")) line = line.slice(0, -1);
-        if (line.startsWith(":") || line.trim() === "") continue;
-        if (!line.startsWith("data: ")) continue;
-
-        const jsonStr = line.slice(6).trim();
-        if (jsonStr === "[DONE]") break;
-
-        try {
-          const parsed = JSON.parse(jsonStr);
-          // Handle both OpenAI and Anthropic streaming formats
-          const content =
-            parsed.choices?.[0]?.delta?.content ||
-            parsed.delta?.text ||
-            "";
-          if (content) onDelta(content);
-        } catch {
-          buffer = line + "\n" + buffer;
-          break;
-        }
-      }
-    }
-
-    onDone();
-  } catch (err: any) {
-    if (err.name === "AbortError") {
-      onDone();
-      return;
-    }
-    onError(`Cannot reach ${getActiveProviderLabel()}. Is it running?`);
+  } catch (err) {
+    settleError(err instanceof Error ? err.message : `Cannot reach ${getActiveProviderLabel()}. Is it running?`);
   }
 }
