@@ -58,12 +58,12 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod notes;
 mod capabilities;
 mod core;
-mod graph;
-mod oauth;
 mod google;
+mod graph;
+mod notes;
+mod oauth;
 mod providers;
 mod training;
 
@@ -76,7 +76,9 @@ use tauri::Manager;
 
 fn resolve_vault_path(app: &tauri::App) -> PathBuf {
     // 1. Check for user-configured vault path in app data
-    let config_path = app.path().app_data_dir()
+    let config_path = app
+        .path()
+        .app_data_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("vault_path.txt");
 
@@ -88,7 +90,9 @@ fn resolve_vault_path(app: &tauri::App) -> PathBuf {
     }
 
     // 2. Default: Documents/ViBo on all platforms
-    let documents = app.path().document_dir()
+    let documents = app
+        .path()
+        .document_dir()
         .unwrap_or_else(|_| PathBuf::from("."));
     let default_vault = documents.join("ViBo");
     std::fs::create_dir_all(&default_vault).ok();
@@ -126,10 +130,22 @@ fn main() {
                 vault_path: vault_path.clone(),
             });
 
-            // storage.rs — SQLite with sqlite-vec
-            let storage_state = core::storage::StorageState::new(&vault_path)
-                .expect("Failed to init storage SQLite");
-            app.manage(storage_state);
+            // storage.rs — SQLite with sqlite-vec (degrades when extension is unavailable)
+            let resource_dir = app.path().resource_dir().ok();
+            match core::storage::StorageState::new(&vault_path, resource_dir.as_deref()) {
+                Ok(storage_state) => {
+                    if storage_state.vector_enabled {
+                        println!("[startup] Storage initialized with vector search enabled");
+                    } else {
+                        eprintln!("[startup] Storage initialized in degraded mode (vector search disabled)");
+                    }
+                    app.manage(storage_state);
+                }
+                Err(err) => {
+                    eprintln!("[startup] Storage initialization failed: {err}");
+                    return Err(tauri::Error::Setup(format!("Storage initialization failed: {err}")));
+                }
+            }
 
             // crypto.rs — keystore SQLite + session key
             let crypto_state = core::crypto::CryptoState::new(&vault_path)
