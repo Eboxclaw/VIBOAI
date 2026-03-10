@@ -40,6 +40,8 @@ interface StoreProviderProps {
 
 export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProviderProps) {
   const [notes, setNotes] = useState<Note[]>(initialNotes);
+  // Agent notes intentionally remain frontend-local for now.
+  // They are assistant scratchpad/context artifacts and not part of the Rust note corpus.
   const [agentNotes, setAgentNotes] = useState<Note[]>(() => {
     try { return JSON.parse(loadAgentNotes()); } catch { return []; }
   });
@@ -84,9 +86,13 @@ export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProvid
     };
     setNotes((prev) => [note, ...prev]);
     setSelectedNoteId(note.id);
-    void tauriClient.createNote(note);
+
+    if (tauriAvailable) {
+      void tauriClient.createNote(note);
+    }
+
     return note;
-  }, []);
+  }, [tauriAvailable]);
 
   const updateNote = useCallback((id: string, updates: Partial<Note>) => {
     setNotes((prev) => {
@@ -94,18 +100,21 @@ export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProvid
         n.id === id ? { ...n, ...updates, updatedAt: new Date().toISOString() } : n
       );
       const updated = nextNotes.find((n) => n.id === id);
-      if (updated) {
+      if (updated && tauriAvailable) {
         void tauriClient.updateNote(updated);
       }
       return nextNotes;
     });
-  }, []);
+  }, [tauriAvailable]);
 
   const deleteNote = useCallback((id: string) => {
     setNotes((prev) => prev.filter((n) => n.id !== id));
     setSelectedNoteId((prev) => (prev === id ? null : prev));
-    void tauriClient.deleteNote(id);
-  }, []);
+
+    if (tauriAvailable) {
+      void tauriClient.deleteNote(id);
+    }
+  }, [tauriAvailable]);
 
   const moveNote = useCallback((id: string, column: string, position: number) => {
     setNotes((prev) => {
@@ -113,12 +122,12 @@ export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProvid
         n.id === id ? { ...n, column, position, updatedAt: new Date().toISOString() } : n
       );
       const moved = nextNotes.find((n) => n.id === id);
-      if (moved) {
+      if (moved && tauriAvailable) {
         void tauriClient.updateNote(moved);
       }
       return nextNotes;
     });
-  }, []);
+  }, [tauriAvailable]);
 
   const selectNote = useCallback((id: string | null) => {
     setSelectedNoteId(id);
