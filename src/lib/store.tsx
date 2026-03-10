@@ -1,7 +1,15 @@
+// src/lib/store.tsx
+// Persistence moved to Rust (notes.rs + kanban.rs).
+// No localStorage. No frontend encryption.
+// State is loaded from Rust on mount, mutations go via invoke().
+
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Note, KanbanColumn, DEFAULT_COLUMNS, ViewMode } from "./types";
-import { loadAgentNotes, saveAgentNotes } from "./crypto";
-import { tauriClient } from "./tauriClient";
+
+// ─────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────
 
 interface StoreContextType {
   notes: Note[];
@@ -9,147 +17,166 @@ interface StoreContextType {
   columns: KanbanColumn[];
   activeView: ViewMode;
   selectedNoteId: string | null;
+  loading: boolean;
   setActiveView: (v: ViewMode) => void;
   selectNote: (id: string | null) => void;
-  addNote: (column?: string, isKanban?: boolean) => Note;
-  updateNote: (id: string, updates: Partial<Note>) => void;
-  deleteNote: (id: string) => void;
-  moveNote: (id: string, column: string, position: number) => void;
-  addAgentNote: (note: Partial<Note>) => Note;
+  addNote: (column?: string, isKanban?: boolean) => Promise<Note>;
+  updateNote: (id: string, updates: Partial<Note>) => Promise<void>;
+  deleteNote: (id: string) => Promise<void>;
+  moveNote: (id: string, column: string, position: number) => Promise<void>;
+  addAgentNote: (note: Partial<Note>) => Promise<Note>;
   getAgentNotes: () => Note[];
+  refreshNotes: () => Promise<void>;
 }
+
+// ─────────────────────────────────────────
+// RUST NOTE → LOCAL NOTE SHAPE
+// ─────────────────────────────────────────
+
+interface RustNote {
+  id: string;
+  title: string;
+  content: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+function rustNoteToNote(r: RustNote, column: string, position: number, isKanban: boolean): Note {
+  return {
+    id: r.id,
+    title: r.title,
+    content: r.content,
+    tags: r.tags,
+    column,
+    position,
+    isKanban,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+// ─────────────────────────────────────────
+// CONTEXT
+// ─────────────────────────────────────────
 
 const StoreContext = createContext<StoreContextType | null>(null);
 
-const COLUMNS_KEY = "zettel-columns";
-
-function loadColumns(): KanbanColumn[] {
-  try {
-    const raw = localStorage.getItem(COLUMNS_KEY);
-    return raw ? JSON.parse(raw) : DEFAULT_COLUMNS;
-  } catch {
-    return DEFAULT_COLUMNS;
-  }
-}
-
 interface StoreProviderProps {
   children: React.ReactNode;
-  pin: string;
-  initialNotes: Note[];
 }
 
-export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProviderProps) {
-  const [notes, setNotes] = useState<Note[]>(initialNotes);
-  // Agent notes intentionally remain frontend-local for now.
-  // They are assistant scratchpad/context artifacts and not part of the Rust note corpus.
-  const [agentNotes, setAgentNotes] = useState<Note[]>(() => {
-    try { return JSON.parse(loadAgentNotes()); } catch { return []; }
-  });
-  const [columns] = useState<KanbanColumn[]>(loadColumns);
+export function StoreProvider({ children }: StoreProviderProps) {
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [agentNotes, setAgentNotes] = useState<Note[]>([]);
+  const [columns] = useState<KanbanColumn[]>(DEFAULT_COLUMNS);
   const [activeView, setActiveView] = useState<ViewMode>("dashboard");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  const tauriAvailable = tauriClient.isAvailable();
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!tauriAvailable) return;
+  // ── Load notes from Rust on mount ──────────────────────────────────
+  const refreshNotes = useCallback(async () => {
+    try {
+      const rustNotes = await invoke<RustNote[]>("note_list");
+      const mapped = rustNotes.map(function(r, i) {
+        const isKanban = r.tags.indexOf("kanban") !== -1;
+        const col = isKanban ? (r.tags.find(function(t) { return t.startsWith("col:"); }) || "col:inbox").slice(4) : "notes";
+        return rustNoteToNote(r, col, i, isKanban);
+      });
 
-    const loadNotesFromTauri = async () => {
-      const tauriNotes = await tauriClient.listNotes();
-      if (tauriNotes) {
-        setNotes(tauriNotes);
-      }
-    };
+      const regular = mapped.filter(function(n) { return n.tags.indexOf("agent") === -1; });
+      const agent   = mapped.filter(function(n) { return n.tags.indexOf("agent") !== -1; });
 
-    void loadNotesFromTauri();
-  }, [tauriAvailable]);
+      setNotes(regular);
+      setAgentNotes(agent);
+    } catch (err) {
+      console.error("Failed to load notes:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  useEffect(() => {
-    saveAgentNotes(JSON.stringify(agentNotes));
-  }, [agentNotes]);
+  useEffect(function() {
+    refreshNotes();
+  }, [refreshNotes]);
 
-  const addNote = useCallback((column = "inbox", isKanban = false) => {
+  // ── Add note ───────────────────────────────────────────────────────
+  const addNote = useCallback(async (column: string = "inbox", isKanban: boolean = false): Promise<Note> => {
     const now = new Date().toISOString();
-    const kanbanTemplate = isKanban
+    const tags: string[] = [];
+    if (isKanban) { tags.push("kanban"); tags.push("col:" + column); }
+
+    const content = isKanban
       ? "## Task\n\n**Status:** To Do\n**Priority:** Medium\n\n### Description\n\n\n### Acceptance Criteria\n- [ ] \n"
       : "";
-    const note: Note = {
-      id: crypto.randomUUID(),
-      title: "Untitled",
-      content: kanbanTemplate,
-      tags: [],
-      column,
-      position: Date.now(),
-      isKanban,
-      createdAt: now,
-      updatedAt: now,
-    };
-    setNotes((prev) => [note, ...prev]);
+
+    const result = await invoke<RustNote>("note_create", {
+      id: "notes/Untitled-" + Date.now() + ".md",
+      content,
+      frontmatter: { tags },
+    });
+
+    const note = rustNoteToNote(result, column, Date.now(), isKanban);
+    setNotes(function(prev) { return [note].concat(prev); });
     setSelectedNoteId(note.id);
-
-    if (tauriAvailable) {
-      void tauriClient.createNote(note);
-    }
-
-    return note;
-  }, [tauriAvailable]);
-
-  const updateNote = useCallback((id: string, updates: Partial<Note>) => {
-    setNotes((prev) => {
-      const nextNotes = prev.map((n) =>
-        n.id === id ? { ...n, ...updates, updatedAt: new Date().toISOString() } : n
-      );
-      const updated = nextNotes.find((n) => n.id === id);
-      if (updated && tauriAvailable) {
-        void tauriClient.updateNote(updated);
-      }
-      return nextNotes;
-    });
-  }, [tauriAvailable]);
-
-  const deleteNote = useCallback((id: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== id));
-    setSelectedNoteId((prev) => (prev === id ? null : prev));
-
-    if (tauriAvailable) {
-      void tauriClient.deleteNote(id);
-    }
-  }, [tauriAvailable]);
-
-  const moveNote = useCallback((id: string, column: string, position: number) => {
-    setNotes((prev) => {
-      const nextNotes = prev.map((n) =>
-        n.id === id ? { ...n, column, position, updatedAt: new Date().toISOString() } : n
-      );
-      const moved = nextNotes.find((n) => n.id === id);
-      if (moved && tauriAvailable) {
-        void tauriClient.updateNote(moved);
-      }
-      return nextNotes;
-    });
-  }, [tauriAvailable]);
-
-  const selectNote = useCallback((id: string | null) => {
-    setSelectedNoteId(id);
-  }, []);
-
-  const addAgentNote = useCallback((partial: Partial<Note>) => {
-    const now = new Date().toISOString();
-    const note: Note = {
-      id: crypto.randomUUID(),
-      title: partial.title || "Agent Note",
-      content: partial.content || "",
-      tags: partial.tags || ["agent"],
-      column: "agent",
-      position: Date.now(),
-      isKanban: false,
-      createdAt: now,
-      updatedAt: now,
-    };
-    setAgentNotes((prev) => [note, ...prev]);
     return note;
   }, []);
 
-  const getAgentNotes = useCallback(() => agentNotes, [agentNotes]);
+  // ── Update note ────────────────────────────────────────────────────
+  const updateNote = useCallback(async (id: string, updates: Partial<Note>): Promise<void> => {
+    if (updates.content !== undefined) {
+      await invoke("note_patch", { id, body: updates.content });
+    }
+    if (updates.tags !== undefined) {
+      await invoke("note_set_frontmatter", { id, frontmatter: { tags: updates.tags } });
+    }
+    setNotes(function(prev) {
+      return prev.map(function(n) {
+        return n.id === id ? Object.assign({}, n, updates, { updatedAt: new Date().toISOString() }) : n;
+      });
+    });
+  }, []);
+
+  // ── Delete note ────────────────────────────────────────────────────
+  const deleteNote = useCallback(async (id: string): Promise<void> => {
+    await invoke("note_delete", { id });
+    setNotes(function(prev) { return prev.filter(function(n) { return n.id !== id; }); });
+    setSelectedNoteId(function(prev) { return prev === id ? null : prev; });
+  }, []);
+
+  // ── Move note (kanban column change) ───────────────────────────────
+  const moveNote = useCallback(async (id: string, column: string, position: number): Promise<void> => {
+    // Update tags to reflect new column
+    const note = notes.find(function(n) { return n.id === id; });
+    if (!note) { return; }
+    const filteredTags = note.tags.filter(function(t) { return !t.startsWith("col:"); });
+    const newTags = filteredTags.concat(["col:" + column]);
+    await invoke("note_set_frontmatter", { id, frontmatter: { tags: newTags } });
+
+    setNotes(function(prev) {
+      return prev.map(function(n) {
+        return n.id === id
+          ? Object.assign({}, n, { column, position, tags: newTags, updatedAt: new Date().toISOString() })
+          : n;
+      });
+    });
+  }, [notes]);
+
+  // ── Agent note ─────────────────────────────────────────────────────
+  const addAgentNote = useCallback(async (partial: Partial<Note>): Promise<Note> => {
+    const result = await invoke<RustNote>("note_create", {
+      id: "notes/agent-" + Date.now() + ".md",
+      content: partial.content !== undefined ? partial.content : "",
+      frontmatter: { tags: ["agent"].concat(partial.tags !== undefined ? partial.tags : []) },
+    });
+    const note = rustNoteToNote(result, "agent", Date.now(), false);
+    setAgentNotes(function(prev) { return [note].concat(prev); });
+    return note;
+  }, []);
+
+  const getAgentNotes = useCallback(function() { return agentNotes; }, [agentNotes]);
+
+  const selectNote = useCallback(function(id: string | null) { setSelectedNoteId(id); }, []);
 
   return (
     <StoreContext.Provider
@@ -159,6 +186,7 @@ export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProvid
         columns,
         activeView,
         selectedNoteId,
+        loading,
         setActiveView,
         selectNote,
         addNote,
@@ -167,6 +195,7 @@ export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProvid
         moveNote,
         addAgentNote,
         getAgentNotes,
+        refreshNotes,
       }}
     >
       {children}
@@ -176,6 +205,6 @@ export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProvid
 
 export function useStore() {
   const ctx = useContext(StoreContext);
-  if (!ctx) throw new Error("useStore must be inside StoreProvider");
+  if (!ctx) { throw new Error("useStore must be inside StoreProvider"); }
   return ctx;
 }
