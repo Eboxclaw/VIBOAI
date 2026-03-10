@@ -8,6 +8,36 @@ Never add a layer before the one below it works.
 
 ---
 
+## Current Implementation Status (this repository)
+
+Legend: ✅ Done · 🟡 Partial/In progress · ⬜ Not done
+
+### Phase 1
+- ✅ **Step 1 — Project Setup** (`src-tauri`, `src`, and `src-android` scaffolds are present)
+- ✅ **Step 2 — Vault Layer (Rust)** (`src-tauri/src/capabilities/vault.rs` implemented)
+- ✅ **Step 3 — SQLite Storage (Rust)** (`src-tauri/src/core/storage.rs` implemented)
+- ✅ **Step 4 — Kanban Layer (Rust)** (`src-tauri/src/capabilities/kanban.rs` implemented)
+- 🟡 **Step 5 — Biometric Login (Android Kotlin Plugin)** (biometric support is wired via `tauri-plugin-biometric`; custom `BiometricPlugin.kt` is not present)
+- 🟡 **Step 6 — Connect TSX UI to Real Data** (backend commands exist, but frontend state still relies heavily on local/client state)
+- ⬜ **Step 7 — Build & Run on Android** (not documented in repo as completed/verified)
+
+### Phase 2
+- ⬜ **Step 8 — Leap SDK (Android Plugin)** (`LeapPlugin.kt` not present)
+- ⬜ **Step 9 — Capability Layer for Agents (trait + MCP server)** (current `capabilities/mod.rs` exports modules only)
+- ⬜ **Step 10 — Koog Agent Sidecar (Kotlin)** (`AgentService.kt` not present)
+- 🟡 **Step 11 — LFM Workbench / training pipeline** (`src-tauri/src/training.rs` exists; full workbench flow not fully represented)
+- 🟡 **Step 12 — SQL → MD Distillation** (distillation storage APIs exist; dedicated `core/distiller.rs` pipeline from this guide is not present)
+
+### Phase 3
+- 🟡 **Step 13 — Knowledge Graph View** (`src-tauri/src/graph.rs` and embedding/storage endpoints exist; end-to-end graph view completion not fully validated)
+- ✅ **Step 14 — Cloud Providers** (`src-tauri/src/providers.rs` implemented)
+- ✅ **Step 15 — AES Encryption** (`src-tauri/src/core/crypto.rs` implemented)
+- ✅ **Step 16 — OAuth (Gmail + Calendar)** (`src-tauri/src/oauth.rs` and `src-tauri/src/google.rs` implemented)
+- ✅ **Step 17 — Tor Routing** (provider and OAuth flows include Tor proxy support)
+- ⬜ **Step 18 — QLoRA Marketplace** (`/marketplace` registry flow not present)
+
+---
+
 ## PHASE 1 — Android MVP: Notes + Kanban + Biometric Login
 > Target: Real app on a physical Android device with working vault
 
@@ -350,11 +380,11 @@ npx tauri android build
 ---
 
 ### Phase 1 Checklist
-- [ ] Notes load from real `.md` files
-- [ ] Notes save and persist
-- [ ] Kanban boards load from `.md` files
-- [ ] Cards can be moved between columns
-- [ ] Biometric prompt on launch
+- [x] Notes load from real `.md` files
+- [x] Notes save and persist
+- [x] Kanban boards load from `.md` files
+- [x] Cards can be moved between columns
+- [~] Biometric prompt on launch (implemented via Tauri biometric plugin, Android-specific Kotlin plugin in this guide not added)
 - [ ] App runs on physical Android device
 
 ---
