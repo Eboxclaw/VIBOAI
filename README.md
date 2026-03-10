@@ -11,6 +11,9 @@ This project is built with:
 - Tailwind CSS
 - Tauri 2 (desktop/mobile shell)
 
+## Build/Migration Docs
+
+- [Tauri + Koog Migration Audit Tracker](docs/tauri-koog-migration-audit.md)
 ## Project Structure
 
 ```text
