@@ -1,11 +1,10 @@
 import { useStore } from "@/lib/store";
-import { Moon, Sun, Trash2, Download, Shield, Eye, EyeOff } from "lucide-react";
+import { Moon, Sun, Trash2, Download, Shield } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useState, useEffect } from "react";
-import { isPinSetup } from "@/lib/crypto";
+import { isPinSetup, lockCrypto } from "@/lib/crypto";
 import { LocalModelsSection } from "@/components/settings/LocalModelsSection";
 import { CloudProvidersSection } from "@/components/settings/CloudProvidersSection";
-import { getActiveProvider, setActiveProvider } from "@/lib/models";
 
 const TOR_TOGGLE_KEY = "zettel-tor-enabled";
 
@@ -13,7 +12,16 @@ export function SettingsView() {
   const { notes } = useStore();
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [torEnabled, setTorEnabled] = useState(() => localStorage.getItem(TOR_TOGGLE_KEY) === "true");
-  const hasPin = isPinSetup();
+  const [hasPin, setHasPin] = useState(false);
+
+  useEffect(() => {
+    const loadPinStatus = async () => {
+      const setup = await isPinSetup();
+      setHasPin(setup);
+    };
+
+    void loadPinStatus();
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -22,6 +30,19 @@ export function SettingsView() {
   useEffect(() => {
     localStorage.setItem(TOR_TOGGLE_KEY, String(torEnabled));
   }, [torEnabled]);
+
+  useEffect(() => {
+    const loadPinStatus = async () => {
+      try {
+        const pinStatus = await isPinSetup();
+        setHasPin(pinStatus);
+      } catch (error) {
+        console.warn("Failed to read vault status", error);
+      }
+    };
+
+    void loadPinStatus();
+  }, []);
 
   const exportNotes = () => {
     const blob = new Blob([JSON.stringify(notes, null, 2)], { type: "application/json" });
@@ -36,16 +57,13 @@ export function SettingsView() {
   const clearAll = () => {
     if (confirm("Delete all notes? This cannot be undone.")) {
       localStorage.removeItem("zettel-notes");
-      localStorage.removeItem("zettel-encrypted-notes");
       window.location.reload();
     }
   };
 
-  const resetEncryption = () => {
-    if (confirm("Reset encryption? This will delete all encrypted notes and your PIN. This cannot be undone.")) {
-      localStorage.removeItem("zettel-encrypted-notes");
-      localStorage.removeItem("zettel-pin-hash");
-      localStorage.removeItem("zettel-crypto-salt");
+  const resetEncryption = async () => {
+    if (confirm("Lock vault now? You can unlock it again with your existing PIN.")) {
+      await lockCrypto();
       window.location.reload();
     }
   };
@@ -55,7 +73,6 @@ export function SettingsView() {
       <div className="flex flex-col gap-4 p-4 pb-20 max-w-md mx-auto">
         <h1 className="text-lg font-bold text-foreground">Settings</h1>
 
-        {/* Appearance */}
         <div className="card-3d rounded-2xl p-4">
           <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Appearance</h2>
           <button
@@ -72,7 +89,6 @@ export function SettingsView() {
           </button>
         </div>
 
-        {/* Encryption */}
         <div className="card-3d rounded-2xl p-4">
           <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-1.5">
             <Shield className="h-3.5 w-3.5" />
@@ -82,7 +98,7 @@ export function SettingsView() {
             <div className="flex items-center justify-between py-1">
               <div>
                 <div className="text-sm font-medium text-foreground">AES-256-GCM</div>
-                <div className="text-[10px] text-muted-foreground">Notes encrypted at rest with PIN-derived key</div>
+                <div className="text-[10px] text-muted-foreground">Vault encryption managed by Rust backend commands</div>
               </div>
               <div className={`flex items-center gap-1.5 text-xs font-medium ${hasPin ? "text-primary" : "text-muted-foreground"}`}>
                 <div className={`h-2 w-2 rounded-full ${hasPin ? "bg-primary" : "bg-muted-foreground/40"}`} />
@@ -91,26 +107,23 @@ export function SettingsView() {
             </div>
             {hasPin && (
               <button
-                onClick={resetEncryption}
+                onClick={() => void resetEncryption()}
                 className="w-full flex items-center gap-2 py-2 text-sm text-destructive hover:text-destructive/80 transition-colors"
               >
                 <Trash2 className="h-4 w-4" />
-                Reset Encryption & PIN
+                Lock Vault
               </button>
             )}
           </div>
         </div>
 
-        {/* Local Models */}
         <LocalModelsSection />
 
-        {/* Cloud Providers */}
         <CloudProvidersSection
           torEnabled={torEnabled}
           onTorToggle={() => setTorEnabled(!torEnabled)}
         />
 
-        {/* Data */}
         <div className="card-3d rounded-2xl p-4">
           <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Data</h2>
           <div className="space-y-2">
@@ -125,7 +138,6 @@ export function SettingsView() {
           </div>
         </div>
 
-        {/* Stats */}
         <div className="card-3d rounded-2xl p-4">
           <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Stats</h2>
           <div className="grid grid-cols-2 gap-3 text-sm">

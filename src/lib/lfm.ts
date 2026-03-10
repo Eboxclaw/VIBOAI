@@ -83,7 +83,7 @@ export function getActiveProviderLabel(): string {
   const provider = getActiveProvider();
   if (provider === "local") return "LFM Local";
   const found = CLOUD_PROVIDERS.find(p => p.id === provider);
-  return found?.name || provider;
+  return found && found.name ? found.name : provider;
 }
 
 /**

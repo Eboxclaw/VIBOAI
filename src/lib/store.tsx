@@ -1,7 +1,6 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { Note, KanbanColumn, DEFAULT_COLUMNS, ViewMode } from "./types";
-import { encryptData, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
-import { encryptData, decryptData, getEncryptedNotes, saveEncryptedNotes, loadAgentNotes, saveAgentNotes } from "./crypto";
+import { loadAgentNotes, saveAgentNotes } from "./crypto";
 import { tauriClient } from "./tauriClient";
 
 interface StoreContextType {
@@ -39,29 +38,18 @@ interface StoreProviderProps {
   initialNotes: Note[];
 }
 
-export function StoreProvider({ children, pin, initialNotes }: StoreProviderProps) {
+export function StoreProvider({ children, pin: _pin, initialNotes }: StoreProviderProps) {
   const [notes, setNotes] = useState<Note[]>(initialNotes);
+  // Agent notes intentionally remain frontend-local for now.
+  // They are assistant scratchpad/context artifacts and not part of the Rust note corpus.
   const [agentNotes, setAgentNotes] = useState<Note[]>(() => {
     try { return JSON.parse(loadAgentNotes()); } catch { return []; }
   });
   const [columns] = useState<KanbanColumn[]>(loadColumns);
   const [activeView, setActiveView] = useState<ViewMode>("dashboard");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  const pinRef = useRef(pin);
   const tauriAvailable = tauriClient.isAvailable();
 
-  useEffect(() => {
-    const loadNotesFromTauri = async () => {
-      const tauriNotes = await tauriClient.listNotes();
-      if (tauriNotes) {
-        setNotes(tauriNotes);
-      }
-    };
-
-    loadNotesFromTauri();
-  }, []);
-
-  // Encrypt and save notes whenever they change
   useEffect(() => {
     if (!tauriAvailable) return;
 
@@ -75,22 +63,6 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
     void loadNotesFromTauri();
   }, [tauriAvailable]);
 
-  // Keep browser-local persistence only for non-Tauri runtime.
-  useEffect(() => {
-    if (tauriAvailable) return;
-
-    const save = async () => {
-      try {
-        const encrypted = await encryptData(JSON.stringify(notes), pinRef.current);
-        saveEncryptedNotes(encrypted);
-      } catch (e) {
-        console.error("Failed to encrypt notes:", e);
-      }
-    };
-    void save();
-  }, [notes, tauriAvailable]);
-
-  // Save agent notes (unencrypted — agents always have access)
   useEffect(() => {
     saveAgentNotes(JSON.stringify(agentNotes));
   }, [agentNotes]);
@@ -113,9 +85,13 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
     };
     setNotes((prev) => [note, ...prev]);
     setSelectedNoteId(note.id);
-    void tauriClient.createNote(note);
+
+    if (tauriAvailable) {
+      void tauriClient.createNote(note);
+    }
+
     return note;
-  }, []);
+  }, [tauriAvailable]);
 
   const updateNote = useCallback((id: string, updates: Partial<Note>) => {
     setNotes((prev) => {
@@ -123,18 +99,21 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
         n.id === id ? { ...n, ...updates, updatedAt: new Date().toISOString() } : n
       );
       const updated = nextNotes.find((n) => n.id === id);
-      if (updated) {
+      if (updated && tauriAvailable) {
         void tauriClient.updateNote(updated);
       }
       return nextNotes;
     });
-  }, []);
+  }, [tauriAvailable]);
 
   const deleteNote = useCallback((id: string) => {
     setNotes((prev) => prev.filter((n) => n.id !== id));
     setSelectedNoteId((prev) => (prev === id ? null : prev));
-    void tauriClient.deleteNote(id);
-  }, []);
+
+    if (tauriAvailable) {
+      void tauriClient.deleteNote(id);
+    }
+  }, [tauriAvailable]);
 
   const moveNote = useCallback((id: string, column: string, position: number) => {
     setNotes((prev) => {
@@ -142,12 +121,12 @@ export function StoreProvider({ children, pin, initialNotes }: StoreProviderProp
         n.id === id ? { ...n, column, position, updatedAt: new Date().toISOString() } : n
       );
       const moved = nextNotes.find((n) => n.id === id);
-      if (moved) {
+      if (moved && tauriAvailable) {
         void tauriClient.updateNote(moved);
       }
       return nextNotes;
     });
-  }, []);
+  }, [tauriAvailable]);
 
   const selectNote = useCallback((id: string | null) => {
     setSelectedNoteId(id);
