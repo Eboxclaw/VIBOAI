@@ -59,11 +59,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod notes;
-mod kanban;
-mod storage;
-mod crypto;
+mod capabilities;
+mod core;
 mod graph;
-mod vault;
 mod oauth;
 mod google;
 mod providers;
@@ -124,17 +122,17 @@ fn main() {
             });
 
             // kanban.rs
-            app.manage(kanban::KanbanState {
+            app.manage(capabilities::kanban::KanbanState {
                 vault_path: vault_path.clone(),
             });
 
             // storage.rs — SQLite with sqlite-vec
-            let storage_state = storage::StorageState::new(&vault_path)
+            let storage_state = core::storage::StorageState::new(&vault_path)
                 .expect("Failed to init storage SQLite");
             app.manage(storage_state);
 
             // crypto.rs — keystore SQLite + session key
-            let crypto_state = crypto::CryptoState::new(&vault_path)
+            let crypto_state = core::crypto::CryptoState::new(&vault_path)
                 .expect("Failed to init crypto keystore");
             app.manage(crypto_state);
 
@@ -144,7 +142,7 @@ fn main() {
             app.manage(graph_state);
 
             // vault.rs — encrypted notes
-            app.manage(vault::VaultState {
+            app.manage(capabilities::vault::VaultState {
                 vault_path: vault_path.clone(),
             });
 
@@ -204,56 +202,56 @@ fn main() {
             notes::note_stats,
 
             // kanban.rs — 16 commands
-            kanban::kanban_create_board,
-            kanban::kanban_get_board,
-            kanban::kanban_list_boards,
-            kanban::kanban_add_column,
-            kanban::kanban_create_card,
-            kanban::kanban_get_card,
-            kanban::kanban_update_card,
-            kanban::kanban_move_card,
-            kanban::kanban_complete_subtask,
-            kanban::kanban_archive_card,
-            kanban::kanban_delete_card,
-            kanban::kanban_create_from_calendar,
-            kanban::kanban_get_due,
-            kanban::kanban_get_overdue,
-            kanban::kanban_get_by_event,
-            kanban::kanban_search,
+            capabilities::kanban::kanban_create_board,
+            capabilities::kanban::kanban_get_board,
+            capabilities::kanban::kanban_list_boards,
+            capabilities::kanban::kanban_add_column,
+            capabilities::kanban::kanban_create_card,
+            capabilities::kanban::kanban_get_card,
+            capabilities::kanban::kanban_update_card,
+            capabilities::kanban::kanban_move_card,
+            capabilities::kanban::kanban_complete_subtask,
+            capabilities::kanban::kanban_archive_card,
+            capabilities::kanban::kanban_delete_card,
+            capabilities::kanban::kanban_create_from_calendar,
+            capabilities::kanban::kanban_get_due,
+            capabilities::kanban::kanban_get_overdue,
+            capabilities::kanban::kanban_get_by_event,
+            capabilities::kanban::kanban_search,
 
             // storage.rs — 19 commands
-            storage::storage_index_note,
-            storage::storage_remove_note,
-            storage::storage_list_notes,
-            storage::storage_get_unembedded,
-            storage::storage_store_embedding,
-            storage::storage_semantic_search,
-            storage::storage_delete_embeddings,
-            storage::storage_cache_lookup,
-            storage::storage_cache_store,
-            storage::storage_cache_clear,
-            storage::storage_route_query,
-            storage::storage_add_routing_signal,
-            storage::storage_list_routing_signals,
-            storage::storage_memory_set,
-            storage::storage_memory_get,
-            storage::storage_memory_get_session,
-            storage::storage_memory_delete,
-            storage::storage_store_distillation,
-            storage::storage_get_distillations,
+            core::storage::storage_index_note,
+            core::storage::storage_remove_note,
+            core::storage::storage_list_notes,
+            core::storage::storage_get_unembedded,
+            core::storage::storage_store_embedding,
+            core::storage::storage_semantic_search,
+            core::storage::storage_delete_embeddings,
+            core::storage::storage_cache_lookup,
+            core::storage::storage_cache_store,
+            core::storage::storage_cache_clear,
+            core::storage::storage_route_query,
+            core::storage::storage_add_routing_signal,
+            core::storage::storage_list_routing_signals,
+            core::storage::storage_memory_set,
+            core::storage::storage_memory_get,
+            core::storage::storage_memory_get_session,
+            core::storage::storage_memory_delete,
+            core::storage::storage_store_distillation,
+            core::storage::storage_get_distillations,
 
             // crypto.rs — 11 commands
-            crypto::crypto_unlock,
-            crypto::crypto_lock,
-            crypto::crypto_is_unlocked,
-            crypto::crypto_setup_vault,
-            crypto::crypto_change_pin,
-            crypto::crypto_encrypt_note,
-            crypto::crypto_decrypt_note,
-            crypto::crypto_keystore_set,
-            crypto::crypto_keystore_get,
-            crypto::crypto_keystore_delete,
-            crypto::crypto_keystore_list,
+            core::crypto::crypto_unlock,
+            core::crypto::crypto_lock,
+            core::crypto::crypto_is_unlocked,
+            core::crypto::crypto_setup_vault,
+            core::crypto::crypto_change_pin,
+            core::crypto::crypto_encrypt_note,
+            core::crypto::crypto_decrypt_note,
+            core::crypto::crypto_keystore_set,
+            core::crypto::crypto_keystore_get,
+            core::crypto::crypto_keystore_delete,
+            core::crypto::crypto_keystore_list,
 
             // graph.rs — 12 commands
             graph::graph_upsert_edge,
@@ -270,15 +268,15 @@ fn main() {
             graph::graph_get_cluster,
 
             // vault.rs — 9 commands
-            vault::vault_create,
-            vault::vault_read,
-            vault::vault_write,
-            vault::vault_delete,
-            vault::vault_list,
-            vault::vault_search,
-            vault::vault_snapshot,
-            vault::vault_restore,
-            vault::vault_count,
+            capabilities::vault::vault_create,
+            capabilities::vault::vault_read,
+            capabilities::vault::vault_write,
+            capabilities::vault::vault_delete,
+            capabilities::vault::vault_list,
+            capabilities::vault::vault_search,
+            capabilities::vault::vault_snapshot,
+            capabilities::vault::vault_restore,
+            capabilities::vault::vault_count,
 
             // google.rs — 14 commands
             google::google_set_credentials,

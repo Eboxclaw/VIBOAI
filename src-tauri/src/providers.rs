@@ -226,7 +226,7 @@ pub fn providers_tor_status(state: State<ProvidersState>) -> bool {
 pub async fn providers_stream(
     app: AppHandle,
     state: State<'_, ProvidersState>,
-    crypto_state: State<'_, crate::crypto::CryptoState>,
+    crypto_state: State<'_, crate::core::crypto::CryptoState>,
     request: CompletionRequest,
 ) -> Result<String, String> {
     let request_id = Uuid::new_v4().to_string();
@@ -236,7 +236,7 @@ pub async fn providers_stream(
 
     // Fetch API key from keystore if needed
     let api_key = if let Some(key_name) = &request.api_key_name {
-        Some(crate::crypto::crypto_keystore_get(crypto_state, key_name.clone())?)
+        Some(crate::core::crypto::crypto_keystore_get(crypto_state, key_name.clone())?)
     } else {
         None
     };
@@ -491,14 +491,14 @@ async fn stream_anthropic(
 #[tauri::command]
 pub async fn providers_complete(
     state: State<'_, ProvidersState>,
-    crypto_state: State<'_, crate::crypto::CryptoState>,
+    crypto_state: State<'_, crate::core::crypto::CryptoState>,
     request: CompletionRequest,
 ) -> Result<String, String> {
     let use_tor = should_use_tor(&state, &request.provider);
     let tor_proxy = state.tor_proxy.clone();
 
     let api_key = if let Some(key_name) = &request.api_key_name {
-        Some(crate::crypto::crypto_keystore_get(crypto_state, key_name.clone())?)
+        Some(crate::core::crypto::crypto_keystore_get(crypto_state, key_name.clone())?)
     } else {
         None
     };

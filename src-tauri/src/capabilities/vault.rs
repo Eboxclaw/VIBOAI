@@ -6,7 +6,7 @@
 /// File format on disk:
 ///   ---
 ///   id: uuid
-///   title: "Encrypted"        ← title is also encrypted, shown as placeholder
+///   title: "Encrypted"        ← title is encrypted at rest
 ///   vault: true               ← marker so UI knows this is a vault note
 ///   encrypted_title: <base64> ← encrypted real title
 ///   created: ...
@@ -30,7 +30,7 @@ use tauri::State;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::crypto::{CryptoState, EncryptedBlob};
+use crate::core::crypto::{CryptoState, EncryptedBlob};
 
 // ─────────────────────────────────────────
 // TYPES
@@ -82,19 +82,6 @@ fn note_path(vault_path: &Path, id: &str) -> PathBuf {
 
 fn ensure_vault_dir(vault_path: &Path) -> Result<(), String> {
     fs::create_dir_all(vault_dir(vault_path)).map_err(|e| e.to_string())
-}
-
-fn encrypt_string(
-    crypto: &CryptoState,
-    plaintext: &str,
-) -> Result<String, String> {
-    let blob = crate::crypto::crypto_encrypt_note(
-        // We call the internal function directly
-        // since we're in the same crate
-        State::new_for_testing(crypto), // placeholder — see note below
-        plaintext.to_string(),
-    )?;
-    serde_json::to_string(&blob).map_err(|e| e.to_string())
 }
 
 fn decrypt_string(
@@ -341,7 +328,7 @@ pub fn vault_list(
         let path = entry.path();
         if path.extension().map(|e| e == "md").unwrap_or(false) {
             if let Some(raw) = read_raw_from_disk(&path) {
-                // If vault is locked, return placeholder titles
+                // If vault is locked, return redacted titles
                 let title = decrypt_string(&crypto, &raw.encrypted_title)
                     .unwrap_or_else(|_| "🔒 Locked".to_string());
 
