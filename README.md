@@ -14,6 +14,8 @@ This project is built with:
 ## Build/Migration Docs
 
 - [Tauri + Koog Migration Audit Tracker](docs/tauri-koog-migration-audit.md)
+- [ViBo Roadmap](docs/VIBO_ROADMAP.md)
+- [GitHub Execution Plan](docs/GITHUB_EXECUTION_PLAN.md)
 ## Project Structure
 
 ```text
